@@ -1,7 +1,6 @@
 registry-data/
 logs/
 output/
-results/
 bin/
 gopath/
 go-build/
