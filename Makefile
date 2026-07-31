@@ -37,7 +37,7 @@ SCHEDULERS ?= kueue volcano yunikorn
 LIMIT_CPU ?= 8
 
 IMAGE_PREFIX ?= 
-GO_IMAGE ?= $(IMAGE_PREFIX)docker.io/library/golang:1.24
+GO_IMAGE ?= $(IMAGE_PREFIX)docker.io/library/golang:1.25
 GOPROXY ?= https://proxy.golang.org,direct
 GOOS ?= $(shell uname -s | tr '[:upper:]' '[:lower:]')
 GO_IN_DOCKER = docker run --rm --network host \

@@ -16,7 +16,7 @@ spec:
         app: scheduler-plugins-controller
     spec:
       containers:
-      - image: kind-registry:5000/registry.k8s.io/scheduler-plugins/controller:v0.29.7
+      - image: kind-registry:5000/registry.k8s.io/scheduler-plugins/controller:v0.32.7
         imagePullPolicy: IfNotPresent
         name: scheduler-plugins-controller
         args:
