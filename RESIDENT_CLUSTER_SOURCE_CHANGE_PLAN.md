@@ -90,27 +90,30 @@ MEMORY_PER_NODE = 64Gi
 
 保留现有目标名称，但改为选择本轮被测调度器。
 
+每轮在任何清理、配置修改或 Deployment 缩放前，原子保存全部调度组件的实际副本数，并记录当前调度器。正式状态保存在仓库 `./.resident-state/`，临时快照写入被忽略的 `./tmp/resident-state-snapshots/` 后再原子提交；两者都不会随结果目录归档，正式状态目录也加入 Git 忽略规则。
+
 #### `up-kueue`
 
-- 清理上次遗留的 Kueue、Coscheduling 测试资源
 - 将 Volcano 和 YuniKorn 相关 Deployment 缩容到 0
 - 将 Kueue Controller、Coscheduling Scheduler 和 Controller 恢复到 1
+- 等待非目标 Deployment 和 Pod 全部归零、目标组件 Ready
+- 清理上次遗留的 Kueue、Coscheduling 测试资源并确认零残留
 
 #### `up-volcano`
 
-- 清理上次遗留的 Volcano 测试资源
-- 保存当前 Volcano Scheduler ConfigMap
+- 原子保存当前 Volcano Scheduler ConfigMap
 - 将 Kueue、Coscheduling 和 YuniKorn 相关 Deployment 缩容到 0
 - 将 Volcano Scheduler、Controller 和 Admission 恢复到 1
+- 等待非目标 Deployment 和 Pod 全部归零、目标组件 Ready
+- 清理上次遗留的 Volcano 测试资源并确认零残留
 
 #### `up-yunikorn`
 
-- 清理上次遗留的 YuniKorn 测试资源
-- 记录测试前是否存在 `yunikorn-configs` 以及原始内容
+- 原子记录测试前是否存在 `yunikorn-configs` 以及原始内容
 - 将 Volcano、Kueue 和 Coscheduling 相关 Deployment 缩容到 0
+- 暂停 YuniKorn 后清理遗留资源和旧测试 ConfigMap
 - 将 YuniKorn Scheduler 和 Admission 恢复到 1
-
-可恢复状态保存在仓库 `./tmp/resident-state/`，供对应 `down` 目标使用。
+- 等待非目标 Deployment 和 Pod 全部归零、目标组件 Ready
 
 ### 3.4 `wait-<scheduler>`
 
@@ -133,7 +136,7 @@ MEMORY_PER_NODE = 64Gi
 - `yunikorn-scheduler`
 - `yunikorn-admission-controller`
 
-等待完成后再次确认 `1001/1001` Node Ready。
+除等待目标组件外，还必须确认全部非目标 Deployment 状态副本和对应 Pod 已归零；完成后再次确认 `1001/1001` Node Ready。
 
 ### 3.5 `test-init-<scheduler>`
 
@@ -158,15 +161,21 @@ MEMORY_PER_NODE = 64Gi
 
 ### 3.7 `reset-auditlog-<scheduler>`
 
-沿用当前源码的处理时机，不在 `make up` 中统一清理日志。每个目标在对应调度器任务开始前执行两项清理：
+沿用当前源码的处理时机，不在 `make up` 中统一清理日志。每个目标在对应调度器任务开始前：
 
-1. 清空常驻集群中的 API Server 审计文件：
+1. 保存 Audit Exporter 原参数和副本数。
+2. 将 Exporter 缩容到 0 并等待 Pod 完全退出。
+3. 清空常驻集群中的 API Server 审计文件。
+4. 使用本轮调度器名称作为 `--cluster-label`，以全新进程启动 Exporter。
+5. 清空本调度器对应的本地结果文件。
+
+审计文件为：
 
 ```text
 /var/log/kubernetes/kube-apiserver-audit.log
 ```
 
-2. 清空该调度器对应的本地结果文件：
+本地结果文件为：
 
 ```text
 reset-auditlog-kueue      -> ./logs/kube-apiserver-audit.kueue.log
@@ -174,7 +183,7 @@ reset-auditlog-volcano    -> ./logs/kube-apiserver-audit.volcano.log
 reset-auditlog-yunikorn   -> ./logs/kube-apiserver-audit.yunikorn.log
 ```
 
-本地文件使用截断清空，与当前源码的 `true > file` 行为保持一致，不删除整个 `./logs` 目录，也不影响其他调度器的日志。清空后再创建本轮 Job，确保旧日志不会混入本轮结果。
+Exporter 停止后才截断日志，避免旧 offset、进程内 Counter/Histogram 和对象时间状态污染本轮。Kueue、Volcano、YuniKorn 分别生成独立 `cluster` 标签。本地文件仍使用截断清空，不删除整个 `./logs` 目录。清空后再创建本轮 Job。
 
 ### 3.8 `test-batch-job-<scheduler>`
 
@@ -190,8 +199,11 @@ reset-auditlog-yunikorn   -> ./logs/kube-apiserver-audit.yunikorn.log
 
 调整为：
 
-1. 将常驻集群审计日志复制到对应文件
-2. 调用 `down-<scheduler>`
+1. 等待 Exporter 指标稳定，并确认 Prometheus 中存在晚于稳定时刻的最终抓取样本
+2. 以 epoch 毫秒记录本轮结果时间窗结束时间
+3. 将常驻集群审计日志复制到对应文件
+4. 停止本轮 Exporter并恢复其测试前参数和副本数
+5. 调用 `down-<scheduler>`
 
 日志文件固定为：
 
@@ -207,33 +219,35 @@ reset-auditlog-yunikorn   -> ./logs/kube-apiserver-audit.yunikorn.log
 
 - 删除 `bench-kueue` 中的 Job、Pod、Workload、LocalQueue 和 PodGroup
 - 删除测试创建的 ClusterQueue、ResourceFlavor、WorkloadPriorityClass
-- 将三套调度相关 Deployment 恢复到默认副本数 1
-- 等待全部基础组件 Ready
+- 将全部调度相关 Deployment 恢复到测试前记录的实际副本数
+- 按原副本数等待运行组件 Ready 或停用组件归零
 
 #### `down-volcano`
 
 - 删除 `bench-volcano` 中的 Volcano Job 和 Pod
 - 删除测试创建的子 Queue、`benchmark-root` 和 PriorityClass
-- 恢复测试前保存的 Volcano Scheduler ConfigMap
-- 重启并等待 Volcano Scheduler Ready
-- 将三套调度相关 Deployment 恢复到默认副本数 1
+- 使用当前 `resourceVersion` 精确替换为测试前保存的 Volcano Scheduler ConfigMap
+- 将全部调度相关 Deployment 恢复到测试前记录的实际副本数
+- Volcano Scheduler 原副本数为 0 时先等待 Pod 归零再恢复配置；原副本数大于 0 时才重启并等待 Ready
 
 #### `down-yunikorn`
 
 - 删除 `bench-yunikorn` 中的 Kubernetes Job 和 Pod
 - 如果测试前不存在 `yunikorn-configs`，删除本轮创建的 ConfigMap
-- 如果测试前已经存在，恢复其原始内容
-- 重启并等待 YuniKorn Scheduler Ready
-- 将三套调度相关 Deployment 恢复到默认副本数 1
+- 如果测试前已经存在，使用当前 `resourceVersion` 精确替换为原始内容
+- 将全部调度相关 Deployment 恢复到测试前记录的实际副本数
+- 清理 YuniKorn Job 和 Pod 不主动扩容 Scheduler 或 Admission
+- YuniKorn Scheduler 原副本数为 0 时先等待 Pod 归零再恢复配置；原副本数大于 0 时才重启并等待 Ready
 
 ### 3.11 顶层 `make down`
 
 将顶层 `down` 改为人工恢复入口：
 
 - 依次执行三套调度器资源清理
-- 根据 `./tmp/resident-state/` 恢复可变配置
-- 将全部调度组件恢复为 1 副本
-- 等待全部基础组件 Ready
+- 根据 `./.resident-state/` 恢复可变配置、Audit Exporter 和调度组件副本数
+- 有快照时恢复测试前实际副本值；没有快照时不擅自启动测试前已停用的组件
+- 按保存的副本状态等待恢复完成
+- 阻塞清理并确认三套测试资源全部为零
 - 验证 `1001/1001` Node Ready
 
 `down` 不再移动结果目录，也不执行任何 Kind 集群删除操作。
@@ -282,10 +296,9 @@ make down
 
 `save-result` 只负责：
 
-- 等待指标窗口完成
-- 调用 `save-result-images.sh`
+- 使用串行实验开始前记录的毫秒级 `FROM` 和最后一次 Prometheus 抓取后的毫秒级 `TO` 调用 `save-result-images.sh`
 - 保存实验环境参数
-- 将 `output` 和 `./logs` 归档到结果目录
+- 只将 `output`、`./logs` 和结果元数据归档到独立 staging 目录，不移动整个 `./tmp`
 
 ## 4. Go 测试代码改造
 
@@ -312,6 +325,8 @@ make down
 ### 4.3 调整完成等待逻辑
 
 `WaitDeployment` 增加目标 namespace 参数，只检查对应测试命名空间中带 `test-instance=1` 的 Pod，避免被其他调度器或历史资源干扰。
+
+`RestartDeployment` 使用 Pod template annotation 触发真实 rollout，并等待 generation 和 updated/ready/available replicas 全部收敛；原副本数为 0 时直接保持停用状态。
 
 ## 5. Kueue 测试资源改造
 
@@ -370,9 +385,9 @@ spec:
 
 - Job 使用 `bench-yunikorn`
 - `yunikorn-configs` 继续写入 `yunikorn` namespace
-- 每轮写入源码生成的 Queue 配置后，重启或等待 YuniKorn Scheduler 完成配置加载
+- 每轮写入源码生成的 Queue 配置后，通过真实 rollout 等待 YuniKorn Scheduler 完成配置加载
 - Job 保留 application ID、queue、gang scheduling annotations
-- `down-yunikorn` 恢复或删除 `yunikorn-configs`
+- `down-yunikorn` 恢复或删除 `yunikorn-configs`；测试前 Scheduler 为 0 副本时不因配置恢复启动或重启它
 
 ## 8. 结果采集改造
 
@@ -396,22 +411,23 @@ spec:
 
 `save-result-images.sh` 保留 `127.0.0.1:8080/grafana`，但 namespace 过滤不能继续固定为 `default`。
 
-改为覆盖：
+改为显式覆盖：
 
 - `bench-kueue`
 - `bench-volcano`
 - `bench-yunikorn`
 
-可以使用 Dashboard 的 All namespace 选项生成统一对比图。
+同时显式选择 `cluster=kueue|volcano|yunikorn`，使三轮由全新 Exporter 进程产生的指标保持独立。图片使用完整串行实验的绝对 `FROM/TO` 时间窗，不再使用“等待后查询最近 N 秒”。
 
 ## 9. 主要修改文件
 
 | 文件 | 修改内容 |
 |---|---|
+| `.gitignore` | 忽略异常恢复所需的常驻状态目录 |
 | `Makefile` | 常驻集群生命周期、串行流程、down 恢复、移除 overview 调用、save-result 不再 down |
 | `hack/save-result-images.sh` | namespace 筛选适配三个测试命名空间 |
 | `test/utils/option.go` | 删除 Node 创建参数 |
-| `test/utils/utils.go` | WaitDeployment 限定 namespace |
+| `test/utils/utils.go` | WaitDeployment 限定 namespace，RestartDeployment 使用真实 rollout |
 | `test/*/batch_job_test.go` | 删除 AddNodes 调用 |
 | `test/*/provider_test.go` | 删除 AddNodes，适配当前组件配置和命名空间 |
 | `test/kueue/*.yaml` | v1beta2、cohortName、作用域和 namespace |
@@ -443,11 +459,12 @@ spec:
 ### 10.3 串行验收
 
 - 按 Kueue、Volcano、YuniKorn 顺序完成
-- 每轮只有目标调度组件运行
-- 每个 `reset-auditlog-<scheduler>` 已清空集群审计文件和本调度器的旧结果文件
+- 每轮只有目标调度组件运行，非目标 Deployment 和 Pod 均已归零
+- 每个 `reset-auditlog-<scheduler>` 均在 Exporter 停止后清空审计文件，并使用独立调度器标签启动新进程
 - 三份审计日志正确写入 `./logs`
-- `save-result` 生成图片和归档目录
-- 执行结束后全部调度组件恢复到 1 副本
+- `save-result` 使用完整实验 `FROM/TO` 生成包含三组独立指标的图片和归档目录
+- 执行结束后全部调度组件恢复到测试前实际副本数
+- 测试前 YuniKorn Scheduler 为 0 副本时，结束后仍为 0，配置恢复过程不触发额外重启
 - 无测试 Job、Queue、Workload、PodGroup 或 PriorityClass 残留
 - 最终保持 `1001/1001` Node Ready
 

@@ -7,14 +7,44 @@ set -o pipefail
 DIR="$(dirname "${BASH_SOURCE[0]}")"
 ROOT_DIR="$(realpath "${DIR}/..")"
 
-RECENT_DURATION=${RECENT_DURATION:-5min}
+: "${FROM:?FROM epoch milliseconds is required}"
+: "${TO:?TO epoch milliseconds is required}"
 
-FROM=$(date -u -Iseconds -d "- ${RECENT_DURATION}" | sed 's/+00:00/.000Z/')
-TO=$(date -u -Iseconds | sed 's/+00:00/.000Z/')
+[[ "${FROM}" =~ ^[0-9]{13}$ ]]
+[[ "${TO}" =~ ^[0-9]{13}$ ]]
+(( FROM < TO ))
 
 OUTPUT="${ROOT_DIR}/output"
 mkdir -p "${OUTPUT}"
 
 for i in {1..8}; do
-  wget -O "${OUTPUT}/panel-${i}.png" "http://127.0.0.1:8080/grafana/render/d-solo/perf?var-rate_interval=5s&orgId=1&from=${FROM}&to=${TO}&timezone=browser&var-datasource=prometheus&var-resource=\$__all&var-user=\$__all&var-verb=create&var-verb=delete&var-verb=patch&var-verb=update&var-namespace=\$__all&var-cluster=\$__all&refresh=5s&theme=dark&panelId=panel-${i}&__feature.dashboardSceneSolo&width=900&height=500&scale=10"
+  file="${OUTPUT}/panel-${i}.png"
+  curl -fsS --get --output "${file}" \
+    --data-urlencode 'var-rate_interval=5s' \
+    --data-urlencode 'orgId=1' \
+    --data-urlencode "from=${FROM}" \
+    --data-urlencode "to=${TO}" \
+    --data-urlencode 'timezone=browser' \
+    --data-urlencode 'var-datasource=prometheus' \
+    --data-urlencode 'var-resource=$__all' \
+    --data-urlencode 'var-user=$__all' \
+    --data-urlencode 'var-verb=create' \
+    --data-urlencode 'var-verb=delete' \
+    --data-urlencode 'var-verb=patch' \
+    --data-urlencode 'var-verb=update' \
+    --data-urlencode 'var-namespace=bench-kueue' \
+    --data-urlencode 'var-namespace=bench-volcano' \
+    --data-urlencode 'var-namespace=bench-yunikorn' \
+    --data-urlencode 'var-cluster=kueue' \
+    --data-urlencode 'var-cluster=volcano' \
+    --data-urlencode 'var-cluster=yunikorn' \
+    --data-urlencode 'refresh=5s' \
+    --data-urlencode 'theme=dark' \
+    --data-urlencode "panelId=panel-${i}" \
+    --data-urlencode '__feature.dashboardSceneSolo=' \
+    --data-urlencode 'width=900' \
+    --data-urlencode 'height=500' \
+    --data-urlencode 'scale=10' \
+    'http://127.0.0.1:8080/grafana/render/d-solo/perf'
+  [[ "$(od -An -tx1 -N8 "${file}" | tr -d ' \n')" == "89504e470d0a1a0a" ]]
 done

@@ -17,7 +17,6 @@ import (
 	"sigs.k8s.io/e2e-framework/klient/k8s"
 	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
 	"sigs.k8s.io/e2e-framework/klient/wait"
-	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 )
 
 var (
@@ -73,22 +72,40 @@ func RestartDeployment(ctx context.Context, r *resources.Resources, name, namesp
 		return err
 	}
 
-	oriReplicas := deploy.Spec.Replicas
+	if deploy.Spec.Replicas == nil || *deploy.Spec.Replicas == 0 {
+		return nil
+	}
 
-	scaleDownPatch := []byte(`{"spec":{"replicas":0}}`)
-	err = r.Patch(ctx, deploy, k8s.Patch{types.MergePatchType, scaleDownPatch})
+	desiredReplicas := *deploy.Spec.Replicas
+	previousGeneration := deploy.Generation
+	restartPatch := []byte(fmt.Sprintf(
+		`{"spec":{"template":{"metadata":{"annotations":{"benchmark.scheduling/restartedAt":%q}}}}}`,
+		time.Now().UTC().Format(time.RFC3339Nano),
+	))
+	err = r.Patch(ctx, deploy, k8s.Patch{types.MergePatchType, restartPatch})
 	if err != nil {
 		return err
 	}
 
-	scaleUpPatch := []byte(fmt.Sprintf(`{"spec":{"replicas":%d}}`, *oriReplicas))
-	err = r.Patch(ctx, deploy, k8s.Patch{types.MergePatchType, scaleUpPatch})
-	if err != nil {
-		return err
-	}
+	err = wait.For(func(ctx context.Context) (bool, error) {
+		current := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: namespace,
+			},
+		}
+		if err := r.Get(ctx, current.Name, current.Namespace, current); err != nil {
+			return false, err
+		}
 
-	err = wait.For(conditions.New(r).
-		DeploymentConditionMatch(deploy, appsv1.DeploymentAvailable, corev1.ConditionTrue),
+		return current.Generation > previousGeneration &&
+			current.Status.ObservedGeneration >= current.Generation &&
+			current.Status.Replicas == desiredReplicas &&
+			current.Status.UpdatedReplicas == desiredReplicas &&
+			current.Status.ReadyReplicas == desiredReplicas &&
+			current.Status.AvailableReplicas == desiredReplicas, nil
+	},
+		wait.WithInterval(time.Second),
 		wait.WithTimeout(time.Minute*1))
 	if err != nil {
 		return err

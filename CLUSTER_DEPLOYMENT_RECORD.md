@@ -274,7 +274,7 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 | `bench-kueue` | `benchmark.scheduling/base=kueue` | Kueue + Coscheduling |
 | `bench-yunikorn` | `benchmark.scheduling/base=yunikorn` | YuniKorn |
 
-空闲基线下三套 Scheduler Deployment 都是 `1` 副本并同时运行。仓库常驻集群流程会在每轮实验前仅保留目标调度组件为 `1` 副本、将其他调度组件缩容为 `0`，并在本轮结束后清理测试资源、恢复配置和全部默认副本数。
+空闲基线下三套 Scheduler Deployment 都是 `1` 副本并同时运行。仓库常驻集群流程会在每轮实验前记录所有调度组件的实际副本数，仅保留目标调度组件为 `1` 副本、将其他调度组件缩容为 `0`，等待非目标 Pod 完全退出后再开始测试；本轮结束后阻塞清理测试资源，使用精确替换恢复可变 ConfigMap，并恢复测试前实际副本数。YuniKorn 清理不主动扩容 Scheduler 或 Admission；测试前 Scheduler 为 `0` 时，配置恢复也不会额外启动或重启它。
 
 ## 10. 监控与审计
 
@@ -314,6 +314,8 @@ Grafana 启用了匿名 Viewer 和 `/grafana/` 子路径。`perf` Dashboard 由 
 - ServiceMonitor 抓取间隔和超时均为 `1s`
 - 已验证指标包括 `pod_scheduling_latency_seconds` 和 `api_requests_total`
 - Grafana Dashboard：`Scheduling Audit Overview`，UID `scheduling-audit-overview`
+
+源码运行性能实验时，会在截断审计日志前停止 Audit Exporter，并为 Kueue、Volcano、YuniKorn 分别以独立 `cluster` 标签启动全新进程。测试结束后先等待 Exporter 指标稳定，再确认 Prometheus 已抓取到晚于稳定时刻的样本，最后以毫秒时间窗采集结果并恢复 Exporter 测试前参数和副本数。这样常驻部署不依赖 overview 集群，也不会把进程内指标或文件 offset 混入下一轮。
 
 ### 持久化风险
 
