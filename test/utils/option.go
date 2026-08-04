@@ -9,10 +9,6 @@ import (
 )
 
 type Options struct {
-	NodeSize      int
-	CpuPerNode    string
-	MemoryPerNode string
-
 	CpuPerQueue        string
 	MemoryPerQueue     string
 	CpuLendingLimit    string
@@ -41,10 +37,6 @@ type Options struct {
 }
 
 func (o *Options) AddFlags() {
-	flag.StringVar(&o.CpuPerNode, "cpu-per-node", getEnv("CPU_PER_NODE", "32"), "CPU resources per node")
-	flag.StringVar(&o.MemoryPerNode, "memory-per-node", getEnv("MEMORY_PER_NODE", "256Gi"), "Memory resources per node")
-	flag.IntVar(&o.NodeSize, "nodes-size", getEnvInt("NODES_SIZE", 1), "Number of nodes to create")
-
 	flag.IntVar(&o.QueueSize, "queues-size", getEnvInt("QUEUES_SIZE", 1), "Number of queues to create")
 	flag.IntVar(&o.JobsSizePerQueue, "jobs-size-per-queue", getEnvInt("JOBS_SIZE_PER_QUEUE", 1), "Number of jobs per queue")
 	flag.IntVar(&o.PodsSizePerJob, "pods-size-per-job", getEnvInt("PODS_SIZE_PER_JOB", 1), "Number of pods per job")

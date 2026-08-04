@@ -24,24 +24,6 @@ type KueueProvider struct {
 	utils.Options
 }
 
-func (p *KueueProvider) AddNodes(ctx context.Context) error {
-	builder := utils.NewNodeBuilder().
-		WithFastReady().
-		WithCPU(p.CpuPerNode).
-		WithMemory(p.MemoryPerNode)
-	for i := range p.NodeSize {
-		err := utils.Resources.Create(ctx,
-			builder.
-				WithName(fmt.Sprintf("node-%d", i)).
-				Build(),
-		)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (p *KueueProvider) InitCase(ctx context.Context) error {
 	var err error
 	for i := 0; i < 3; i++ {

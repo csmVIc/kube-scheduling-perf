@@ -16,11 +16,18 @@ data:
     - plugins:
       - name: predicates
       - name: capacity
-        #{{ if .hierarchy }}
         enableHierarchy: true
-        #{{ else }}
-        enableHierarchy: false
-        #{{ end }}
+---
+apiVersion: scheduling.volcano.sh/v1beta1
+kind: Queue
+metadata:
+  name: benchmark-root
+spec:
+  parent: root
+  reclaimable: true
+  capability:
+    cpu: #{{ .cpuCapabilityTotal }}
+    memory: #{{ .memoryCapabilityTotal }}
 ---
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass

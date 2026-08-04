@@ -1,11 +1,12 @@
-apiVersion: kueue.x-k8s.io/v1beta1
+apiVersion: kueue.x-k8s.io/v1beta2
 kind: ClusterQueue
 metadata:
   name: default-cluster-queue-#{{ .name }}
-  namespace: default
 spec:
-  namespaceSelector: {}
-  cohort: "team"
+  namespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: bench-kueue
+  cohortName: "team"
   #{{ if .preemption }}
   preemption:
     reclaimWithinCohort: Any
@@ -34,10 +35,10 @@ spec:
         borrowingLimit: #{{ .memoryLendingLimit }}
         #{{ end }}
 ---
-apiVersion: kueue.x-k8s.io/v1beta1
+apiVersion: kueue.x-k8s.io/v1beta2
 kind: LocalQueue
 metadata:
   name: default-local-queue-#{{ .name }}
-  namespace: default
+  namespace: bench-kueue
 spec:
   clusterQueue: default-cluster-queue-#{{ .name }}

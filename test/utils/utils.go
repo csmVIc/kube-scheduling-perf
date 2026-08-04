@@ -96,10 +96,16 @@ func RestartDeployment(ctx context.Context, r *resources.Resources, name, namesp
 	return nil
 }
 
-func WaitDeployment(ctx context.Context, r *resources.Resources) error {
+func WaitDeployment(ctx context.Context, r *resources.Resources, namespace string) error {
+	namespacedResources, err := resources.New(r.GetConfig())
+	if err != nil {
+		return err
+	}
+	namespacedResources.WithNamespace(namespace)
+
 	var pods corev1.PodList
 	return wait.For(func(context.Context) (done bool, err error) {
-		err = r.List(ctx, &pods,
+		err = namespacedResources.List(ctx, &pods,
 			resources.WithLabelSelector(`test-instance == 1`),
 			func(lo *metav1.ListOptions) {
 				lo.Limit = 1

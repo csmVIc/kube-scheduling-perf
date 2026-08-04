@@ -2,7 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: yunikorn-job-#{{ .name }}-#{{ .index }}
-  namespace: default
+  namespace: bench-yunikorn
 spec:
   backoffLimit: 1
   ttlSecondsAfterFinished: 1

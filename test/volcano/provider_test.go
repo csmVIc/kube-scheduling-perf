@@ -11,10 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/e2e-framework/klient/decoder"
-	"sigs.k8s.io/e2e-framework/klient/k8s"
 )
 
 //go:embed init.yaml
@@ -30,24 +27,6 @@ type VolcanoProvider struct {
 	utils.Options
 }
 
-func (p *VolcanoProvider) AddNodes(ctx context.Context) error {
-	builder := utils.NewNodeBuilder().
-		WithFastReady().
-		WithCPU(p.CpuPerNode).
-		WithMemory(p.MemoryPerNode)
-	for i := range p.NodeSize {
-		err := utils.Resources.Create(ctx,
-			builder.
-				WithName(fmt.Sprintf("node-%d", i)).
-				Build(),
-		)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (p *VolcanoProvider) InitCase(ctx context.Context) error {
 	cpuPerQueue, err := resource.ParseQuantity(p.CpuPerQueue)
 	if err != nil {
@@ -59,9 +38,7 @@ func (p *VolcanoProvider) InitCase(ctx context.Context) error {
 		return err
 	}
 
-	var hierarchy bool
-
-	cpuCapabilityTotal := ""
+	cpuCapabilityTotal := utils.TimesQuantity(cpuPerQueue, p.QueueSize+p.ImpactingQueuesSize+p.CriticalQueuesSize).String()
 	cpuCapability := ""
 	cpuDeserved := ""
 	cpuGuarantee := ""
@@ -72,17 +49,14 @@ func (p *VolcanoProvider) InitCase(ctx context.Context) error {
 			return err
 		}
 
-		hierarchy = true
-		cpuCapabilityTotal = utils.TimesQuantity(cpuPerQueue, p.QueueSize+p.ImpactingQueuesSize+p.CriticalQueuesSize).String()
 		cpuCapability = cpuPerQueue.String()
 		cpuPerQueue.Sub(cpuLendingLimit)
 		cpuDeserved = cpuPerQueue.String()
 	} else {
-		cpuCapabilityTotal = utils.TimesQuantity(cpuPerQueue, p.QueueSize+p.ImpactingQueuesSize+p.CriticalQueuesSize).String()
 		cpuCapability = cpuPerQueue.String()
 	}
 
-	memoryCapabilityTotal := ""
+	memoryCapabilityTotal := utils.TimesQuantity(memoryPerQueue, p.QueueSize+p.ImpactingQueuesSize+p.CriticalQueuesSize).String()
 	memoryCapability := ""
 	memoryDeserved := ""
 	memoryGuarantee := ""
@@ -92,26 +66,11 @@ func (p *VolcanoProvider) InitCase(ctx context.Context) error {
 			return err
 		}
 
-		hierarchy = true
-		memoryCapabilityTotal = utils.TimesQuantity(memoryPerQueue, p.QueueSize+p.ImpactingQueuesSize+p.CriticalQueuesSize).String()
 		memoryCapability = memoryPerQueue.String()
 		memoryPerQueue.Sub(memoryLendingLimit)
 		memoryDeserved = memoryPerQueue.String()
 	} else {
-		memoryCapabilityTotal = utils.TimesQuantity(memoryPerQueue, p.QueueSize+p.ImpactingQueuesSize+p.CriticalQueuesSize).String()
 		memoryCapability = memoryPerQueue.String()
-	}
-
-	obj := &unstructured.Unstructured{}
-	obj.SetName("root")
-	obj.SetAPIVersion("scheduling.volcano.sh/v1beta1")
-	obj.SetKind("Queue")
-	err = utils.Resources.Patch(ctx, obj, k8s.Patch{
-		PatchType: types.MergePatchType,
-		Data:      []byte(fmt.Sprintf(`{"spec":{"reclaimable": true, "deserved":null, "guarantee":null, "capability":{"cpu": %q, "memory": %q}}}`, cpuCapabilityTotal, memoryCapabilityTotal)),
-	})
-	if err != nil {
-		return err
 	}
 
 	err = utils.Resources.Delete(ctx, &corev1.ConfigMap{
@@ -125,9 +84,10 @@ func (p *VolcanoProvider) InitCase(ctx context.Context) error {
 	}
 
 	err = decoder.DecodeEach(ctx, strings.NewReader(utils.YamlWithArgs(initYaml, map[string]any{
-		"gang":       p.Gang,
-		"preemption": p.Preemption,
-		"hierarchy":  hierarchy,
+		"gang":                  p.Gang,
+		"preemption":            p.Preemption,
+		"cpuCapabilityTotal":    cpuCapabilityTotal,
+		"memoryCapabilityTotal": memoryCapabilityTotal,
 	})), decoder.CreateHandler(utils.Resources))
 	if err != nil {
 		return err

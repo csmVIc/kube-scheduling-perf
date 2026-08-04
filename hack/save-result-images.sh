@@ -16,5 +16,5 @@ OUTPUT="${ROOT_DIR}/output"
 mkdir -p "${OUTPUT}"
 
 for i in {1..8}; do
-  wget -O "${OUTPUT}/panel-${i}.png" "http://127.0.0.1:8080/grafana/render/d-solo/perf?var-rate_interval=5s&orgId=1&from=${FROM}&to=${TO}&timezone=browser&var-datasource=prometheus&var-resource=\$__all&var-user=\$__all&var-verb=create&var-verb=delete&var-verb=patch&var-verb=update&var-namespace=default&var-cluster=\$__all&refresh=5s&theme=dark&panelId=panel-${i}&__feature.dashboardSceneSolo&width=900&height=500&scale=10"
+  wget -O "${OUTPUT}/panel-${i}.png" "http://127.0.0.1:8080/grafana/render/d-solo/perf?var-rate_interval=5s&orgId=1&from=${FROM}&to=${TO}&timezone=browser&var-datasource=prometheus&var-resource=\$__all&var-user=\$__all&var-verb=create&var-verb=delete&var-verb=patch&var-verb=update&var-namespace=\$__all&var-cluster=\$__all&refresh=5s&theme=dark&panelId=panel-${i}&__feature.dashboardSceneSolo&width=900&height=500&scale=10"
 done

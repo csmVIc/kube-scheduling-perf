@@ -3,7 +3,7 @@ apiVersion: scheduling.x-k8s.io/v1alpha1
 kind: PodGroup
 metadata:
   name: kueue-job-#{{ .name }}-#{{ .index }}
-  namespace: default
+  namespace: bench-kueue
 spec:
   scheduleTimeoutSeconds: 300
   minMember: #{{ .size }}
@@ -13,7 +13,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: kueue-job-#{{ .name }}-#{{ .index }}
-  namespace: default
+  namespace: bench-kueue
   labels:
     kueue.x-k8s.io/queue-name: #{{ .queue }}
     #{{ if .priority }}

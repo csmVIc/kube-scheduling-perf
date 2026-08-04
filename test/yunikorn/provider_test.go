@@ -22,24 +22,6 @@ type YunikornProvider struct {
 	utils.Options
 }
 
-func (p *YunikornProvider) AddNodes(ctx context.Context) error {
-	builder := utils.NewNodeBuilder().
-		WithFastReady().
-		WithCPU(p.CpuPerNode).
-		WithMemory(p.MemoryPerNode)
-	for i := range p.NodeSize {
-		err := utils.Resources.Create(ctx,
-			builder.
-				WithName(fmt.Sprintf("node-%d", i)).
-				Build(),
-		)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (p *YunikornProvider) InitCase(ctx context.Context) error {
 	cpuGuaranteed := p.CpuPerQueue
 	cpuMax := p.CpuPerQueue
@@ -76,7 +58,7 @@ func (p *YunikornProvider) InitCase(ctx context.Context) error {
 		memoryGuaranteed = tmp.String()
 	}
 
-	return decoder.DecodeEach(ctx, strings.NewReader(utils.YamlWithArgs(initQueueYaml, map[string]any{
+	err := decoder.DecodeEach(ctx, strings.NewReader(utils.YamlWithArgs(initQueueYaml, map[string]any{
 		"queueSize":          make([]byte, p.QueueSize),
 		"impactingQueueSize": make([]byte, p.ImpactingQueuesSize),
 		"criticalQueueSize":  make([]byte, p.CriticalQueuesSize),
@@ -86,6 +68,11 @@ func (p *YunikornProvider) InitCase(ctx context.Context) error {
 		"memoryMax":          memoryMax,
 		"preemption":         p.Preemption,
 	})), decoder.CreateHandler(utils.Resources))
+	if err != nil {
+		return err
+	}
+
+	return utils.RestartDeployment(ctx, utils.Resources, "yunikorn-scheduler", "yunikorn")
 }
 
 func (p *YunikornProvider) AddJobs(ctx context.Context) error {

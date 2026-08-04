@@ -2,7 +2,7 @@ apiVersion: batch.volcano.sh/v1alpha1
 kind: Job
 metadata:
   name: volcano-job-#{{ .name }}-#{{ .index }}
-  namespace: default
+  namespace: bench-volcano
 spec:
   maxRetry: 1
   ttlSecondsAfterFinished: 1

@@ -7,12 +7,7 @@ import (
 )
 
 func TestInit(t *testing.T) {
-	err := provider.AddNodes(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = provider.InitCase(t.Context())
+	err := provider.InitCase(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +19,7 @@ func TestBatchJob(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = utils.WaitDeployment(t.Context(), utils.Resources)
+	err = utils.WaitDeployment(t.Context(), utils.Resources, "bench-volcano")
 	if err != nil {
 		t.Fatal(err)
 	}

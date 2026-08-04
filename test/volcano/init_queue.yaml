@@ -2,8 +2,8 @@ apiVersion: scheduling.volcano.sh/v1beta1
 kind: Queue
 metadata:
   name: test-queue-#{{ .name }}
-  namespace: default
 spec:
+  parent: benchmark-root
   reclaimable: true
 
   #{{ if or .cpuCapability .memoryCapability }}
