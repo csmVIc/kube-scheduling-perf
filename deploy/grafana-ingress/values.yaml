@@ -1,0 +1,71 @@
+image:
+  registry: docker.io
+  repository: traefik
+  tag: v3.7.1
+  digest: sha256:6b9cbca6fac42ab0075f5437d8dc1685cfd188626d8d515839ea94f8b6271c42
+  pullPolicy: IfNotPresent
+
+versionOverride: v3.7.1
+
+deployment:
+  replicas: 1
+
+ingressClass:
+  enabled: true
+  isDefaultClass: false
+  name: benchmark-grafana
+
+providers:
+  kubernetesCRD:
+    enabled: false
+  kubernetesIngress:
+    enabled: true
+    ingressClass: benchmark-grafana
+    namespaces:
+      - monitoring
+    publishedService:
+      enabled: false
+  kubernetesGateway:
+    enabled: false
+
+gateway:
+  enabled: false
+
+api:
+  dashboard: false
+  insecure: false
+
+metrics:
+  prometheus: null
+
+logs:
+  general:
+    level: WARN
+  access:
+    enabled: false
+
+ports:
+  web:
+    expose:
+      default: true
+    exposedPort: 80
+  websecure:
+    expose:
+      default: false
+
+service:
+  spec:
+    type: ClusterIP
+
+resources:
+  requests:
+    cpu: 20m
+    memory: 64Mi
+
+nodeSelector:
+  node-role.kubernetes.io/control-plane: ""
+
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule

@@ -5,7 +5,7 @@
 本文记录远端调度基准集群的实际部署状态、安装来源、版本、关键配置、镜像摘要、重建顺序和已知风险，供故障恢复、版本更新和实验环境审计使用。
 
 - 初始记录时间：`2026-08-03T12:35:49Z`（北京时间 `2026-08-03 20:35:49`）
-- 最近变更时间：`2026-08-05`，纠正常驻集群部署时未经确认改变的三套调度方案性能基线，并完成部署与健康验证
+- 最近变更时间：`2026-08-05`，纠正常驻集群部署时未经确认改变的调度与 Prometheus 资源基线，完成两轮独立完整测试，并形成尚待部署的 Grafana Ingress 设计
 - 服务器：`104.105.137.213`
 - 当前唯一 Kind 集群：`volcano-benchmark-1348`
 - Kubernetes：`v1.34.8`
@@ -32,12 +32,14 @@
 - 部署与验收脚本：`/root/benchmark-1348-deploy/scripts`
 - 运行镜像摘要：`/root/benchmark-1348-deploy/deployed-image-lock.md`
 
-### 本地部署包副本
+`/root/benchmark-1348-deploy` 是当前集群唯一的可执行权威部署包。重装、修复、指纹核对和版本升级均以该目录中的实际文件为准。
+
+### 过时本地参考副本（只读）
 
 - 路径：`/Users/csmvic/Documents/Codex/2026-08-03/k8s-1-35/deploy`
 - 方案文档：`/Users/csmvic/Documents/Codex/2026-08-03/k8s-1-35/benchmark-cluster-deployment-plan.md`
 
-远端与本地部署包的脚本、values、manifest 和版本文件在本次记录时 SHA-256 一致。实际恢复时以远端部署包为执行入口，并在执行前与本地副本比较。
+该目录只是早期部署过程留下的过时参考副本，不再随当前集群更新，不能保证与远端部署包相同，也不能作为恢复源。后续不要再修改该目录；如需追溯，只进行只读比较。
 
 ## 3. 宿主机与工具链
 
@@ -194,7 +196,7 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 - Kueue：本地 `kueue-v0.19.0.yaml` 使用带字段接管的 `kubectl apply --server-side --force-conflicts`；随后应用本地 `kueue-manager-config.yaml`，以 JSON Patch 覆盖官方 manifest 的资源配置，重启 Controller，并运行 Webhook 作用域修正脚本。字段接管用于保证资源覆盖后的重复安装不会因 field manager 冲突而中止。
 - Coscheduling：本地 source tarball 解压后，先 server-side apply `manifests/coscheduling/crd.yaml` 和 `config/crd/bases/scheduling.x-k8s.io_elasticquotas.yaml`，再从 `manifests/install/charts/as-a-second-scheduler` 进行 Helm 安装；最后用本地 ConfigMap 覆盖 scheduler 配置，为 Controller 补齐 QPS/Burst/Workers 参数并重启。
 - YuniKorn：`helm upgrade --install` 使用本地 `yunikorn-1.9.0.tgz` 和 `values/yunikorn.yaml`；由于 1.9.0 chart 强制渲染内存字段和 Go 内存环境变量，安装脚本随后以 JSON Patch 精确恢复 CPU-only 资源基线并移除 `GOMEMLIMIT`、`GOGC`，再把 Mutating Webhook 限定到 `bench-yunikorn` 标签、Validating Webhook 限定到 `yunikorn` 命名空间。
-- 监控：`helm upgrade --install` 使用本地且已校验的 kube-prometheus-stack tgz；Image Renderer 由 chart 部署；Audit Exporter、审计 Dashboard 和 `perf` Dashboard 均由部署目录中的本地文件 apply；安装脚本同时安装并启用 Grafana 8080 systemd 转发服务。
+- 监控：`helm upgrade --install` 使用本地且已校验的 kube-prometheus-stack tgz；Prometheus 不设置 CPU/内存 request 或 limit；Image Renderer 由 chart 部署；Audit Exporter、审计 Dashboard 和 `perf` Dashboard 均由部署目录中的本地文件 apply；安装脚本同时安装并启用 Grafana 8080 systemd 转发服务。
 
 ## 8. 调度器实际配置
 
@@ -309,6 +311,7 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 - Prometheus retention：`7d`
 - Scrape interval：`5s`
 - Evaluation interval：`30s`
+- Prometheus resources：未设置 CPU/内存 request 或 limit
 - Alertmanager：关闭
 - Node Exporter：关闭
 - Kubelet、CoreDNS、kube-proxy ServiceMonitor：关闭
@@ -324,6 +327,21 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 
 Grafana 启用了匿名 Viewer 和 `/grafana/` 子路径。`perf` Dashboard 由 `manifests/perf-dashboard.json` 创建为 `scheduling-perf-dashboard` ConfigMap，固定 UID 为 `perf`；Image Renderer 负责 `/render/d-solo/perf` 图片接口。`verify-monitoring.sh` 会同时验证 31004、8080、Dashboard UID 和 PNG 文件签名。
 
+### Grafana Ingress 设计（尚待部署）
+
+仓库中的 `deploy/grafana-ingress/` 已形成以下持久访问设计，但本节记录时尚未应用到集群，不能把这些对象或 `31005` 端口视为当前已提供的服务：
+
+- Controller：Traefik Helm chart `40.2.0`，应用版本 `v3.7.1`
+- Helm release 和命名空间：`benchmark-grafana-ingress`
+- 非默认 IngressClass：`benchmark-grafana`
+- 监听范围：只处理 `monitoring` 命名空间的 Kubernetes Ingress；不启用 Traefik CRD 和 Gateway provider
+- 路由：`/grafana` 转发到 `monitoring/monitoring-grafana:80`
+- 计划宿主机入口：`0.0.0.0:31005`
+- 持久暴露方式：systemd 服务将宿主机 `31005` 转发到 Traefik ClusterIP Service 的 `80` 端口
+- Kind 端口映射：不新增 `extraPortMappings`；现有 Kind 集群不重建，因此 `31005` 不是 Docker/Kind 端口映射
+
+官方 chart 制品来源为 `https://github.com/traefik/traefik-helm-chart/releases/download/v40.2.0/traefik-40.2.0.tgz`，固定 SHA-256 为 `b73d0159fc1222cc9bdaefde80000a9bad2dfe81de4caed14b9509b3bf6c1df9`。部署后计划使用浅色入口 `http://104.105.137.213:31005/grafana/d/perf/?theme=light`；部署前仍使用现有 `31004` 或回环 `8080` 入口。
+
 ### Audit Exporter
 
 - 镜像：`ghcr.io/wzshiming/kube-apiserver-audit-exporter/kube-apiserver-audit-exporter:v0.0.25`
@@ -334,6 +352,12 @@ Grafana 启用了匿名 Viewer 和 `/grafana/` 子路径。`perf` Dashboard 由 
 - Grafana Dashboard：`Scheduling Audit Overview`，UID `scheduling-audit-overview`
 
 源码运行性能实验时，会在截断审计日志前停止 Audit Exporter，并为 Kueue、Volcano、YuniKorn 分别以独立 `cluster` 标签启动全新进程。测试结束后先等待 Exporter 指标稳定，再确认 Prometheus 已抓取到晚于稳定时刻的样本，最后以毫秒时间窗采集结果并恢复 Exporter 测试前参数和副本数。这样常驻部署不依赖 overview 集群，也不会把进程内指标或文件 offset 混入下一轮。
+
+### 审计日志稀疏文件风险（已观察）
+
+当前实验通过截断正在由 API Server 写入的同一个审计文件来重置日志，但不会让 API Server 重新打开文件。第二轮完整测试已经观察到：API Server 保留旧文件 offset 后继续写入会形成带大段 NUL 空洞的稀疏文件，随后复制到结果目录的审计日志继承该问题。Gang 场景中的日志表观大小逐轮增长到数 GiB，但实际分配块明显更小；例如最后一个结果中的 Kueue 审计日志表观大小约 `5.80 GB`，而分配空间约 `313 MiB`。
+
+因此，非空或表观大小很大的审计日志不等于完整有效的 JSON Lines 文件。后续分析必须先检查 NUL、首条有效 JSON 的偏移和记录连续性；不能只根据文件大小验收。Prometheus 抓取屏障通过只能证明 Exporter 指标已被抓取，不能替代原始审计文件完整性验证。该风险尚未修复。
 
 ### 持久化风险
 
@@ -457,11 +481,11 @@ cd /root/benchmark-1348-deploy
 - Webhook 阻断其他测试：检查 namespace 标签和 Kueue/Volcano/YuniKorn selector，不要直接删除全部 Webhook。
 - Prometheus/Grafana Pod 重建：历史数据不可恢复，因为当前使用 emptyDir；Dashboard ConfigMap 可恢复。
 - Kind 集群被删除：etcd 和集群状态不可恢复，只能按本文顺序重建；宿主机审计日志目录可能仍在。
-- 远端部署包损坏：使用本地副本恢复，并先比较本文记录的 SHA-256。
+- 远端部署包损坏：不要使用过时的 `k8s-1-35` 本地副本覆盖；应从当前版本化备份或已确认来源重建远端权威部署包，并逐项核对本文指纹和实时集群状态。
 
 ## 16. 部署包文件指纹
 
-以下为远端和本地副本在记录时一致的关键文件 SHA-256：
+以下为当前远端权威部署包的关键文件 SHA-256。过时本地参考副本不在一致性承诺范围内：
 
 | 文件 | SHA-256 |
 |---|---|
@@ -470,7 +494,7 @@ cd /root/benchmark-1348-deploy
 | `values/volcano.yaml` | `e2bbd980356f744873887498bcc50da99d5a7ee6d2abbbfade6c135078271316` |
 | `values/coscheduling.yaml` | `3bc034780c3681265dd399556abf80ff8b09817c301c3a116b183e2fb3443920` |
 | `values/yunikorn.yaml` | `a2955429e78d203c17a9b4c21de03ab1aa04a055a57989d16fcba9d7eacb1856` |
-| `values/monitoring.yaml` | `10ade921cffcb719201bbaa01d3f924d17eff4f01904a4a70d0ba19d1e51f566` |
+| `values/monitoring.yaml` | `9e1851bb5538b05bb7380be878857b22c13d3acc0f688af3bad49f5320c48bf6` |
 | `manifests/kueue-manager-config.yaml` | `4ef6994a2568fc4ad9b5aac90b27107cc3c985405810d274d99d70425497057a` |
 | `manifests/coscheduling-configmap.yaml` | `734c327e14ca405679e5bb57e875386aa11981e17dfbe7e22a3749b2efc4ebbe` |
 | `manifests/benchmark-namespaces.yaml` | `e766ab1fc5c3de100f727a5ac46fcaee8ae3e9d0eb9eb682c4769b715fbba74f` |
@@ -502,7 +526,7 @@ cd /root/benchmark-1348-deploy
 - 精确删除 `kwok-node-1000` 至 `kwok-node-4999`，基线缩减为 `1000` 个 KWOK Node。
 - 安装 Grafana Image Renderer `v5.11.1`、`perf` Dashboard 和 `127.0.0.1:8080/grafana` systemd 转发服务。
 - 补装 Scheduler Plugins `ElasticQuota` CRD，修复 `scheduler-plugins-controller` 因 informer 找不到资源而持续重启的问题；部署和验收脚本已同步固化。
-- 本地部署包与远端 `/root/benchmark-1348-deploy` 的本轮变更文件 SHA-256 已逐项核对一致。
+- 当时曾对本地参考副本与远端 `/root/benchmark-1348-deploy` 的本轮变更文件逐项核对；远端此后继续修订，该历史结论不代表当前仍一致。
 - 常驻集群源码在服务器隔离目录 `/root/benchmark-resident-source` 完成 Kueue、Volcano、YuniKorn 单项冒烟和完整串行实验；原目录 `/root/github/kube-scheduling-perf` 的跟踪文件未改动。
 - 完整串行验收结果位于 `/root/benchmark-resident-source/results/1785850713`，包含 8 张有效 PNG 和三份非空 API Server 审计日志。
 - 在 Volcano 完成 `prepare`、尚未执行 `start/end` 时直接执行 `make down`，确认实验资源和状态文件零残留、Volcano 配置恢复、全部调度 Deployment 为 `1/1`、`1001/1001` Node Ready。
@@ -515,7 +539,7 @@ cd /root/benchmark-1348-deploy
 - Coscheduling 保留当前版本默认 parallelism `16`，恢复 Controller 参数 `qps/burst/workers=1000/1000/100` 和旧基线等价的 Permit 等待 `60s`；v0.32.7 和 v0.34.7 的相同上游缺陷会让 Controller 的 QPS/Burst 实际保持默认值，因此未额外改变有效行为。
 - Volcano 恢复 Scheduler、Controller、Admission API client `1000/1000` 和 Controller 三类 worker `100`；保留已批准的新版 Admission 集合、命名空间隔离以及 `benchmark-root` 所需的 Scheduler actions/plugins。
 - YuniKorn 测试态继续使用旧基线已有的 `kubernetes.qps/burst=1000/1000`；恢复统一 CPU-only 资源，并移除 chart 因内存限制生成的 `GOMEMLIMIT`、`GOGC`。
-- 本地部署包与远端部署包的 6 个变更文件逐项 SHA-256 一致；执行 `install-schedulers.sh` 后，基础集群、调度器和监控验证全部通过，Node 为 `1001/1001 Ready`。
+- 当时曾对 6 个变更文件逐项核对；远端部署包此后继续修订，当前只以远端为权威。执行 `install-schedulers.sh` 后，基础集群、调度器和监控验证全部通过，Node 为 `1001/1001 Ready`。
 - 独立评审后补齐 Controller Manager `concurrent-job-syncs=100`、Controller Manager 与默认 Scheduler CPU `1/8`、默认 Scheduler QPS/Burst `1000/1000`，显式禁用 Kueue WaitForPodsReady，并在 Kubernetes Webhook 层隔离 YuniKorn。
 - `configure-control-plane-baseline.sh` 与完整 `install-schedulers.sh` 均完成重复执行验证；首次复跑发现并修复 Kueue server-side apply 字段冲突，修复后从头复跑成功。
 
@@ -526,3 +550,31 @@ cd /root/benchmark-1348-deploy
 - 随后唯一一轮完整 `make` 在首场景 Kueue 通过后因 SSH 连接中断而终止；Volcano、YuniKorn 和后续场景未执行。该轮属于基础设施中断，未修复、未重跑；现场保存在 `/root/github/kube-scheduling-perf/results/failed-full-20260805T100557Z`。
 - 中断后 `make down` 返回 0；`.resident-state` 和实验资源均无残留。
 - 最终 `verify-base.sh 1000`、`verify-schedulers.sh`、`verify-monitoring.sh` 全部通过，`1001/1001` Node Ready，8 个调度组件均 Running/Ready 且重启次数为 0，YuniKorn Webhook 最近 15 分钟失败数为 0。
+
+## 20. 2026-08-05 两轮独立完整测试与最终边界
+
+### 20.1 第一轮失败与 Prometheus 基线纠正
+
+- 第一轮独立完整测试使用提交 `73ae14df7f29e6f4e81e34f91e286e1ff7f278cd`，运行时间为 `2026-08-05T13:20:37Z` 至 `13:44:51Z`，总耗时 `24m13.961s`，在场景 3 失败。
+- 直接根因是 Prometheus 在 `4Gi` 内存 limit 下发生 OOMKilled；常驻改造前源码中的 Prometheus CR 没有 resources，该限制也没有获得基线变更批准。
+- 已从远端 `values/monitoring.yaml` 删除整个 Prometheus resources 配置并重新应用，恢复为不设置 CPU/内存 request 或 limit；同时保留原监控版本和抓取配置。修复后的 values 指纹见第 16 节。
+- 第一轮失败现场位于服务器 `/root/github/kube-scheduling-perf/results/failed-full-20260805T132037Z`。修复后 Prometheus 健康，第二轮没有再次 OOM。
+
+### 20.2 第二轮完整测试最终失败
+
+| 项目 | 结果 |
+|---|---|
+| 被测提交 | `c3805c84e68fa233f76041ec720b7ccbbb20cbe8` |
+| 运行时间 | `2026-08-05T14:00:57Z` 至 `14:59:26Z` |
+| 总耗时 | `3508.883s`（`58m28.883s`） |
+| 结果目录 | `1785938917`、`1785939214`、`1785939507`、`1785939808`、`1785940558`、`1785941020`、`1785941406`、`1785941910` |
+| 进程退出码 | `0`，但不满足完整测试验收条件 |
+| 最终结论 | 失败；按执行计划不再修复，也不执行第三轮完整测试 |
+
+场景 1 至 4 的三套 `TestBatchJob` 均通过。场景 5（Gang `10000 job × 1 pod`）中，Kueue 测试和指标屏障通过后，`kubectl delete podgroups --all --timeout=5m` 已将对象删为 0，但客户端按对象等待时因限流耗尽 5 分钟并返回错误。Kueue 恢复状态未清除，Volcano 准备阶段被安全检查拒绝；既有分号串行流程仍继续启动 Volcano 测试，最终因 Volcano Admission 仍为 0 副本而发生 Webhook connection refused。该 Volcano 数据没有性能意义。场景 6 至 8 后续执行完成，但单个子测试失败已经使整轮不能验收通过；顶层退出码 `0` 也不能覆盖内部失败。
+
+第二轮创建了 8 个结果目录和 `64` 张具有合法 PNG 文件签名的图片，但现场检查确认图片面板均为 `No data`，同一 panel 在 8 个场景中的文件摘要完全相同。这些图片不能作为有效指标结果，说明仅检查 PNG 签名的既有验收不足。
+
+第二轮复制出的部分审计日志还包含第 10 节记录的稀疏 NUL 空洞，不能仅凭非空和表观大小判定有效。原始运行与失败现场保存在服务器 `/root/benchmark-full-runs/20260805T140031Z-second` 和 `/root/github/kube-scheduling-perf/results/failed-full-20260805T140057Z`。
+
+测试后基础集群、8 个调度组件和监控组件均恢复健康，`1001/1001` Node Ready。最终失败属于常驻资源清理的高基数适配缺陷及结果制品验收缺陷，不是 Prometheus `4Gi` OOM 的复发；本轮停止修复，留待后续单独设计。

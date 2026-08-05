@@ -1,0 +1,13 @@
+[Unit]
+Description=Expose the benchmark Grafana Ingress on TCP 31005
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/root/benchmark-1348-deploy/bin/kubectl --kubeconfig=/root/benchmark-1348-deploy/kubeconfig --namespace=benchmark-grafana-ingress port-forward --address=0.0.0.0 service/benchmark-grafana-ingress-traefik 31005:80
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

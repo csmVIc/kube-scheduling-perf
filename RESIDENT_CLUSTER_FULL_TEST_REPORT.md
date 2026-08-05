@@ -2,14 +2,14 @@
 
 ## 1. 结论
 
-本次常驻集群源码改造已完成代码评审、评审问题修复、提交、推送、服务器同步和最小测试。
+常驻集群源码改造、基线纠正、最小测试、两轮独立完整测试和最终恢复均已执行完毕，最终结论是“完整测试未通过”。
 
-- 最小测试在首轮通过，Kueue、Volcano、YuniKorn 三轮和结果采集链路均正常。
-- 正式完整测试失败，失败点是第 1 个场景的 Kueue `TestBatchJob`。
-- 直接表现为测试运行 350 秒后仍未满足测试命名空间内 `test-instance=1` Pod 数量归零，最终触发 Go 测试超时。
-- 现场的 Kueue Controller 在 512 MiB 内存限制下反复被 `OOMKilled`，进入 `CrashLoopBackOff`；这是本轮失败的主要原因。
-- 按执行方案，完整测试失败后未修改源码、未重跑完整测试，后续场景也未继续执行。
-- 集群已恢复到测试前固定基线，资源、配置、副本、监控和节点检查均通过。
+- 基线纠正后的场景 1 最小测试首轮通过，Kueue、Volcano、YuniKorn 均完成调度和结果采集。
+- 第一轮独立完整测试在场景 3 因未经批准加入的 Prometheus `4Gi` 内存上限触发 OOM 而失败；随后只实施了计划允许的一轮修复。
+- 第二轮执行完全部 8 个场景，`TestBatchJob` 为 `23/24` 通过；唯一失败是场景 5 Volcano，其上游原因是 Kueue 清理 10000 个 PodGroup 时同步删除超时并保留 resident state。
+- Prometheus 修复在第二轮得到验证，全程没有 OOM 或容器重启；但结果图片全部为 `No data`，场景 4 后的部分审计文件存在稀疏 NUL 空洞。
+- 按执行约束不再修复、不执行第三轮完整测试；因最终验收未通过，`README.md` 保持不变。
+- 测试结束后集群已恢复固定基线，`1001/1001` Node、8 个调度组件和监控组件均健康。
 
 ## 2. 被测版本和集群基线
 
@@ -412,3 +412,102 @@ Volcano 指标屏障异常退出，使本轮状态尚未恢复；随后 YuniKorn
 - 不改动既有串行测试结构，不修改 `RESIDENT_CLUSTER_SOURCE_CHANGE_PLAN.md`，也不修改已明确排除的 `/Users/csmvic/Documents/Codex/2026-08-03/k8s-1-35/`。
 
 失败后执行 `make down` 返回 `0`；`.resident-state` 已清除，实验资源零残留，`1001/1001` Node、8 个调度组件及全部监控组件恢复健康。修复提交并推送后，只再执行一轮完整测试；无论第二轮成功或失败都不再修复或执行第三轮。
+
+## 17. 常驻集群第二轮完整测试（最终失败）
+
+### 17.1 执行信息与验收结论
+
+| 项目 | 内容 |
+| --- | --- |
+| 被测 Commit | `c3805c84e68fa233f76041ec720b7ccbbb20cbe8` |
+| 命令 | `make` |
+| 开始时间 | `2026-08-05T14:00:57Z` |
+| 结束时间 | `2026-08-05T14:59:26Z` |
+| 总耗时 | `3508.883s`（`58m28.883s`） |
+| Wrapper 退出码 | `0` |
+| 子测试结果 | `23/24` 组 `TestBatchJob` 通过；场景 5 Volcano 失败 |
+| 验收结论 | 完整测试失败 |
+| 运行归档 | 服务器 `/root/benchmark-full-runs/20260805T140031Z-second` |
+| 失败归档 | 服务器 `/root/github/kube-scheduling-perf/results/failed-full-20260805T140057Z` |
+
+Wrapper 退出码为 `0` 只表示顶层命令执行到末尾，不代表 24 组调度器子测试全部成功。场景 5 Volcano 的 `TestBatchJob` 明确返回失败，因此不能用 Wrapper 退出码覆盖子测试结果。
+
+### 17.2 八个场景的时间边界
+
+| 场景 | 模式与参数 | UTC 时间边界 | 耗时 | 结果目录 | 子测试结果 |
+| --- | --- | --- | ---: | --- | --- |
+| 1 | 非 Gang，`10000 job × 1 pod` | `14:00:57` 至 `14:09:33` | `8m36s` | `results/1785938917` | 3 组通过 |
+| 2 | 非 Gang，`500 job × 20 pod` | `14:09:33` 至 `14:14:30` | `4m57s` | `results/1785939214` | 3 组通过 |
+| 3 | 非 Gang，`20 job × 500 pod` | `14:14:30` 至 `14:19:23` | `4m53s` | `results/1785939507` | 3 组通过 |
+| 4 | 非 Gang，`1 job × 10000 pod` | `14:19:23` 至 `14:24:24` | `5m01s` | `results/1785939808` | 3 组通过 |
+| 5 | Gang，`10000 job × 1 pod` | `14:24:24` 至 `14:36:54` | `12m30s` | `results/1785940558` | Kueue、YuniKorn 通过；Volcano 失败 |
+| 6 | Gang，`500 job × 20 pod` | `14:36:54` 至 `14:44:37` | `7m43s` | `results/1785941020` | 3 组通过 |
+| 7 | Gang，`20 job × 500 pod` | `14:44:37` 至 `14:51:03` | `6m26s` | `results/1785941406` | 3 组通过 |
+| 8 | Gang，`1 job × 10000 pod` | `14:51:03` 至 `14:59:26` | `8m23s` | `results/1785941910` | 3 组通过 |
+
+表中场景时间边界取自带 UTC 时间戳的完整日志；秒级边界合计与 Wrapper 记录的精确总耗时 `3508.883s` 一致。
+
+### 17.3 每个调度器的测试和指标屏障
+
+| 场景 | 调度方案 | `TestBatchJob` | Prometheus 抓取屏障 |
+| --- | --- | ---: | --- |
+| 1 | Kueue | `118.03s` | 通过，`total=140082` |
+| 1 | Volcano | `118.04s` | 通过，`total=130064` |
+| 1 | YuniKorn | `118.04s` | 通过，`total=120059` |
+| 2 | Kueue | `45.96s` | 通过，`total=64903` |
+| 2 | Volcano | `44.02s` | 通过，`total=65166` |
+| 2 | YuniKorn | `44.42s` | 通过，`total=69250` |
+| 3 | Kueue | `40.30s` | 通过，`total=61319` |
+| 3 | Volcano | `40.13s` | 通过，`total=56500` |
+| 3 | YuniKorn | `50.78s` | 通过，`total=60731` |
+| 4 | Kueue | `50.02s` | 通过，`total=59902` |
+| 4 | Volcano | `40.03s` | 通过，`total=50817` |
+| 4 | YuniKorn | `50.03s` | 通过，`total=60087` |
+| 5 | Kueue | `161.25s` | 通过，`total=140210` |
+| 5 | Volcano | 失败，`0.01s` | 屏障通过，`total=4`；只证明失败请求已被抓取 |
+| 5 | YuniKorn | `118.04s` | 通过，`total=163263` |
+| 6 | Kueue | `59.19s` | 通过，`total=64215` |
+| 6 | Volcano | `44.05s` | 通过，`total=64445` |
+| 6 | YuniKorn | `94.39s` | 通过，`total=104155` |
+| 7 | Kueue | `70.75s` | 通过，`total=60425` |
+| 7 | Volcano | `50.13s` | 通过，`total=67413` |
+| 7 | YuniKorn | `100.60s` | 通过，`total=100313` |
+| 8 | Kueue | `100.04s` | 通过，`total=62823` |
+| 8 | Volcano | `70.04s` | 通过，`total=65627` |
+| 8 | YuniKorn | `170.04s` | 通过，`total=100212` |
+
+本轮执行了全部 24 组 `TestBatchJob`，23 组通过、1 组失败。24 组 Prometheus 抓取屏障都返回成功，但指标屏障通过不能代替调度器子测试通过。
+
+### 17.4 失败链路与问题分类
+
+场景 5 中，Kueue 的 `10000 job × 1 pod` Gang 子测试本身已在 `161.25s` 内通过，指标屏障也已通过。后续 `down-kueue` 对 10000 个 PodGroup 执行同步 `kubectl delete --all --timeout=5m`；API Server 已接受删除请求，但命令在等待高基数资源全部完成删除时达到 5 分钟截止点，以 `client rate limiter Wait ... exceed context deadline` 失败。
+
+清理异常使 Kueue 的 resident state 保留。随后 Volcano 准备阶段因 `Resident state exists` 被拒绝，Volcano 未被正确激活；后续子测试仍尝试创建 Volcano Job，被当时未运行的 Volcano Admission Webhook 以 `connect: connection refused` 拒绝，因此 `TestBatchJob` 在 `0.01s` 后失败。
+
+该问题分类为常驻集群模式在高基数资源下的清理实现缺陷：固定 5 分钟的同步删除方式不适配 10000 个 PodGroup 的清理路径。它不是 Kueue、Volcano 或 YuniKorn 的资源基线偏离，也不是当前 Kubernetes 或调度器版本配置不适配导致的调度缺陷。
+
+第一轮暴露的 Prometheus 问题未复现：本轮前后 Prometheus 主容器的 `restartCount` 均为 `0`，未发生 OOM，所有指标屏障均能完成。第二轮时间窗内 Prometheus 进程 RSS 峰值约为 `19.44GiB`，也直接说明旧 `4Gi` 上限不足。这证明移除该内存上限及对短暂请求失败增加重试的上一轮修复已生效，同时表明后续完整测试仍需预留充足宿主机内存。
+
+### 17.5 结果产物检查
+
+本轮生成了预期的 8 个结果目录：
+
+- `results/1785938917`
+- `results/1785939214`
+- `results/1785939507`
+- `results/1785939808`
+- `results/1785940558`
+- `results/1785941020`
+- `results/1785941406`
+- `results/1785941910`
+
+每个目录都有 3 份调度方案审计文件、8 张 PNG、实验环境参数和毫秒级结果时间窗，但产物完整性不等于内容有效：
+
+- 64 张 Grafana PNG 都显示 `No data`，不能作为有效的图形实验结果。使用各目录历史时间窗直接查询 Prometheus 时，除场景 5 本就无效的 Volcano 子测试外，Kueue、Volcano、YuniKorn 的 Created 和 Scheduled 原始指标均可查。
+- 从场景 4 开始，审计文件中出现稀疏 NUL 区段，因此这些文件不能按干净的 JSONL 审计日志验收或直接解析。
+
+### 17.6 最终决定
+
+尽管第二轮 Wrapper 退出码为 `0`、八个场景都执行到结果保存，且 Prometheus OOM 修复验证有效，场景 5 Volcano 的明确失败、64 张 `No data` 图片和场景 4 以后审计文件的 NUL 内容都不符合完整测试验收条件，因此本轮最终判定为失败。
+
+按已确认的执行约束，第二轮完整测试失败后不再修复、不再执行第三轮完整测试。`README.md` 只在完整测试验证通过后才重构，因此本轮不修改 `README.md`。
