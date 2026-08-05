@@ -518,3 +518,11 @@ cd /root/benchmark-1348-deploy
 - 本地部署包与远端部署包的 6 个变更文件逐项 SHA-256 一致；执行 `install-schedulers.sh` 后，基础集群、调度器和监控验证全部通过，Node 为 `1001/1001 Ready`。
 - 独立评审后补齐 Controller Manager `concurrent-job-syncs=100`、Controller Manager 与默认 Scheduler CPU `1/8`、默认 Scheduler QPS/Burst `1000/1000`，显式禁用 Kueue WaitForPodsReady，并在 Kubernetes Webhook 层隔离 YuniKorn。
 - `configure-control-plane-baseline.sh` 与完整 `install-schedulers.sh` 均完成重复执行验证；首次复跑发现并修复 Kueue server-side apply 字段冲突，修复后从头复跑成功。
+
+## 19. 2026-08-05 基线纠正后复测记录
+
+- 被测源码 Commit 为 `3fedf92c82fce58ca12f1e1551443a55b4e79e97`。
+- 场景 1 最小测试首轮通过：Kueue `118.25s`、Volcano `122.84s`、YuniKorn `118.04s`；结果位于 `/root/github/kube-scheduling-perf/results/1785924215`，包含完整控制台日志、3 份审计日志和 8 张 Grafana PNG。
+- 随后唯一一轮完整 `make` 在首场景 Kueue 通过后因 SSH 连接中断而终止；Volcano、YuniKorn 和后续场景未执行。该轮属于基础设施中断，未修复、未重跑；现场保存在 `/root/github/kube-scheduling-perf/results/failed-full-20260805T100557Z`。
+- 中断后 `make down` 返回 0；`.resident-state` 和实验资源均无残留。
+- 最终 `verify-base.sh 1000`、`verify-schedulers.sh`、`verify-monitoring.sh` 全部通过，`1001/1001` Node Ready，8 个调度组件均 Running/Ready 且重启次数为 0，YuniKorn Webhook 最近 15 分钟失败数为 0。

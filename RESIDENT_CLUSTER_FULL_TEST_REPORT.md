@@ -280,3 +280,76 @@ Kueue Controller 持续 OOM 时，Workload 终结处理无法推进。为完成�
 - 基础集群、调度器、监控验证全部通过，Node 为 `1001/1001 Ready`。
 
 这些修订恢复遗漏的旧性能/隔离语义，没有改变已批准的常驻集群源码设计，因此仍不修改 `RESIDENT_CLUSTER_SOURCE_CHANGE_PLAN.md`。
+
+## 13. 基线纠正后的场景 1 最小测试
+
+### 13.1 执行信息
+
+| 项目 | 内容 |
+| --- | --- |
+| 被测 Commit | `3fedf92c82fce58ca12f1e1551443a55b4e79e97` |
+| 命令 | `make serial-test TEST_TIMEOUT_SECONDS=350 NODES_SIZE=1000 QUEUES_SIZE=1 JOBS_SIZE_PER_QUEUE=10000 PODS_SIZE_PER_JOB=1` |
+| 执行轮次 | 第 1 轮通过；未使用修复和第 2 轮机会 |
+| 执行时间 | `2026-08-05T09:55:46Z` 至 `2026-08-05T10:04:32Z` |
+| 结果时间窗 | `1785923747415` 至 `1785924196477` 毫秒 |
+| 结果目录 | 服务器 `/root/github/kube-scheduling-perf/results/1785924215` |
+
+### 13.2 结果
+
+| 调度器 | TestBatchJob | Prometheus 抓取屏障 | 审计日志大小 |
+| --- | ---: | --- | ---: |
+| Kueue | 通过，`118.25s` | `total=140057`，`sample_millis=1785923877380` | `706282667` 字节 |
+| Volcano | 通过，`122.84s` | `total=130078`，`sample_millis=1785924033926` | `601949788` 字节 |
+| YuniKorn | 通过，`118.04s` | `total=120062`，`sample_millis=1785924196411` | `629227162` 字节 |
+
+结果目录包含完整控制台日志、`envs.txt`、`result-window.txt`、3 份非空 API Server 审计日志和 8 张有效 Grafana PNG。测试期间三个调度方案均未出现 OOM 或组件重启。
+
+本轮证明上一轮 Kueue 失败来自常驻部署时未经批准加入的 `512Mi` 内存限制，而不是本次常驻集群源码改造。将三套方案恢复为旧基线的 CPU-only 资源后，同一场景和同一 350 秒超时正常通过，因此没有继续修改源码或设计方案。
+
+场景结束后执行 `make down` 返回 0；基础集群、调度器和监控验证均通过，YuniKorn Webhook 最近 15 分钟失败数为 0。
+
+## 14. 基线纠正后的完整测试
+
+### 14.1 执行信息与结论
+
+| 项目 | 内容 |
+| --- | --- |
+| 被测 Commit | `3fedf92c82fce58ca12f1e1551443a55b4e79e97` |
+| 命令 | `make` |
+| 开始时间 | `2026-08-05T10:05:57Z` |
+| 最后日志时间 | `2026-08-05T10:08:28Z` |
+| 结果 | 未完成；SSH 连接中断导致远端前台 `make` 终止 |
+| 重试 | 按批准方案不修复、不重跑完整测试 |
+| 部分结果目录 | 服务器 `/root/github/kube-scheduling-perf/results/failed-full-20260805T100557Z` |
+
+完整测试的首场景 Kueue `TestBatchJob` 已通过，耗时 `118.35s`；Prometheus 抓取屏障为 `total=140152`、`sample_millis=1785924488923`，部分时间窗为 `1785924358145` 至 `1785924488940` 毫秒。Kueue 清理完成后，流程开始切换至 Volcano；在等待 Volcano 激活时 SSH 连接被关闭。
+
+重新登录后确认没有残留的 `make` 或 `test-*` 进程，日志没有测试失败、超时、OOM 或退出码记录，`.resident-state` 显示流程停在 Volcano 激活阶段。Volcano 尚未执行 `TestInit` 或 `TestBatchJob`，YuniKorn 和后续七个场景均未执行，也没有生成正式完整测试结果目录。
+
+因此，本轮完整测试的验收结论是“基础设施连接中断导致未完成”。它不是调度器用例失败，也不能作为三套方案完整性能验收通过或失败的依据。根据执行方案，完整测试无论何种失败都不修复、不重跑。
+
+### 14.2 已保存现场
+
+部分结果目录包含：
+
+- `console.log`：19641 字节；
+- `logs/kube-apiserver-audit.kueue.log`：706840547 字节；
+- `tmp/result-from-millis` 和 `tmp/result-to-millis`：首个 Kueue 子轮次的部分时间窗。
+
+## 15. 本轮最终恢复与健康状态
+
+中断后执行源码已有的 `make down`，返回码为 0。最终状态如下：
+
+| 检查项 | 结果 |
+| --- | --- |
+| `.resident-state/` | 不存在 |
+| Kueue、Volcano、YuniKorn 实验资源 | 零残留断言通过 |
+| Kubernetes | client/server 均为 `v1.34.8` |
+| Node | `1001/1001 Ready` |
+| 8 个调度组件 Pod | 全部 Running/Ready，重启次数均为 0 |
+| 控制面性能基线 | Controller Manager Job 并发 `100`、CPU `1/8`；默认 Scheduler QPS/Burst `1000/1000`、CPU `1/8` |
+| 调度器基线验证 | 通过；8 个组件均为 CPU `500m/8`、无内存限制 |
+| YuniKorn Webhook | 作用域验证通过；最近 15 分钟调用失败数为 0 |
+| Monitoring | Audit Exporter、Prometheus、Grafana、Image Renderer 和 Dashboard 全部通过 |
+
+本轮不需要修改 `RESIDENT_CLUSTER_SOURCE_CHANGE_PLAN.md`：配置纠正恢复的是改造前基线，SSH 中断也没有暴露新的源码设计问题。
