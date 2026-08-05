@@ -612,7 +612,7 @@ Grafana Ingress 的版本化部署源位于仓库，当前文件指纹如下：
 
 ## 21. 2026-08-05 Grafana Ingress 部署记录
 
-- 部署时间：`2026-08-05T15:20:14Z`；Helm release `benchmark-grafana-ingress` revision `1`，chart `40.2.0`，应用 `v3.7.1`。
+- 首次部署时间：`2026-08-05T15:20:14Z`；收紧重复部署与验收逻辑后于 `15:33:41Z` 完成幂等 reconcile。Helm release `benchmark-grafana-ingress` 当前 revision `2`，chart `40.2.0`，应用 `v3.7.1`。
 - 初始记录的 GitHub release tgz URL 返回 `404`，下载阶段即停止，未创建集群资源；随后改用 Traefik 官方 Helm 仓库 URL，并以官方 index 中相同的 SHA-256 校验后部署。
 - Controller Deployment 为 `1/1`，Pod restart `0`；Service 是 ClusterIP `10.96.157.253:80`，IngressClass `benchmark-grafana` 为非默认类，controller 为 `traefik.io/ingress-controller`。
 - Ingress `monitoring/benchmark-grafana` 将 `/grafana` 转发到 `monitoring-grafana:80`。Traefik 只监听 `monitoring` 命名空间的 Kubernetes Ingress，不启用 CRD、Gateway provider、管理 Dashboard 或额外 metrics。
