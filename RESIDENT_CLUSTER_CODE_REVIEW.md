@@ -82,3 +82,69 @@
 | 配置快照 | 已修复：临时文件与正式恢复状态分离、校验后原子提交；恢复时按当前 `resourceVersion` 精确替换，全部恢复成功后才删除快照。 |
 
 修复后二次只读复核结论：无剩余阻断问题。
+
+## 三套调度方案基线纠正独立配置评审
+
+- 被审提交：`cbd8642f8b641a73c54a662ffd323f7ff93c6825`
+- 改造前基线：`6ce46e0cd2464a5c03331f8ee756980719ca4d69`
+- 核对范围：Kueue v0.19.0 + Scheduler Plugins/Coscheduling v0.34.7、Volcano v1.15.1、YuniKorn v1.9.0；旧基线源码；本地部署包 `/Users/csmvic/Documents/Codex/2026-08-03/k8s-1-35/deploy`；远端部署包 `/root/benchmark-1348-deploy`；Kubernetes v1.34.8 实时集群；`.codex/AGENT.md`、`CLUSTER_DEPLOYMENT_RECORD.md`、两份方案和完整测试报告。远端核对全程只读，未执行 apply、patch、scale、rollout 或冒烟测试。
+- 一致性摘要：本地与远端部署包中 `values/`、`manifests/`、`scripts/`、`systemd/` 及关键根文件共 28 个文件的聚合 SHA-256 均为 `c43123141c26aad5a3ae2bf38566bc0447a3c69563e52ee83ccfe5a11e93c739`。实时集群为 `v1.34.8`、`1001/1001 Ready`、其中 1000 个 KWOK Node；8 个调度 Deployment 的镜像、副本、CPU `500m/8`、无内存 request/limit 与部署包一致。
+
+### 高：Coscheduling Controller 的 QPS/Burst 参数在 v0.34.7 中实际不生效
+
+- 位置：部署包 `scripts/install-schedulers.sh:128-129`，`RESIDENT_CLUSTER_FULL_TEST_REPORT.md:231,242,250`，`CLUSTER_DEPLOYMENT_RECORD.md:244`；上游 v0.34.7 `cmd/controller/app/server.go:39-46`。
+- 证据：安装脚本和实时 Deployment 都显示 `--qps=1000 --burst=1000 --workers=100`，实时日志也证明两个 Controller 的 worker count 为 100。但 v0.34.7 二进制的上游源码先对局部 `config := ctrl.GetConfigOrDie()` 设置 QPS/Burst，随后却用新的 `ctrl.GetConfigOrDie()` 创建 Manager；已修改的 `config` 未被传入。因此 worker 参数生效，QPS/Burst 仍落到 controller-runtime/client-go 默认值，记录中的 `1000/1000` 只是命令行表象。
+- 影响：PodGroup/ElasticQuota Controller 的 API 访问受低默认限速约束，无法恢复旧基线的 `1000/1000/100`，会直接影响 Kueue gang/Coscheduling 轮次的吞吐。`Ready` 和参数存在性检查无法发现此问题。
+- 建议：在保持已批准版本边界的前提下，回移上游修复或构建、固定一个将 `config` 传给 `ctrl.NewManager` 的 v0.34.7 镜像；若选择升级组件，应另行获得版本变更批准。在修复并用可观测证据确认实际 client 限速前，不应声称 Controller QPS/Burst 已恢复。
+
+### 高：基线纠正漏掉了直接参与 Job 与调度链路的控制面参数
+
+- 位置：旧基线 `clusters/{kueue,volcano,yunikorn}/kind.yaml:13-29`、`clusters/kueue/Makefile:47-55`、`clusters/{volcano,yunikorn}/Makefile:31-34`；当前部署包 `kind-config.yaml:9-14`、`scripts/create-canary-cluster.sh:32-36`；`test/kueue/batch_job.yaml:12-43`、`test/yunikorn/batch_job.yaml:1-10`。
+- 证据：旧三套 Kind 配置都显式设置 `kube-controller-manager --concurrent-job-syncs=100`，并把 Controller Manager 静态 Pod 资源设为 CPU request `1`、limit `8`；Kueue 基线还把默认 `kube-scheduler` 设为 client `1000/1000`、CPU `1/8`。当前本地/远端 `kind-config.yaml` 没有 `concurrent-job-syncs` 和 `scheduler` 配置，也没有静态 Pod 资源覆盖步骤；实时 Controller Manager 为 request `200m`、无 limit，默认 Scheduler 为 request `100m`、无 limit。v1.34.8 实际二进制 `--help` 证明 `concurrent-job-syncs` 仍受支持且默认为 `5`，Scheduler QPS/Burst 默认为 `50/100`；Scheduler 旗标记为 deprecated，但仅在指定 `--config` 时才被忽略，当前静态 Pod 没有 `--config`。
+- 影响：Kueue 和 YuniKorn 都创建原生 Kubernetes Job，Job Controller 并发从 100 回落到 5，会限制 Pod 创建、完成与 TTL 清理吞吐。Kueue 非 gang 清单只在 gang 分支写入 `schedulerName: coscheduling`，因此默认 Scheduler 实际是该轮次的直接被测链路；`50/100` 与更低 CPU request 不等价于旧基线。本轮报告仅审计 8 个 Deployment，因而漏掉了这两个直接依赖。
+- 边界判断：Controller Manager `5000/10000` 有既有常驻集群部署设计依据，且不低于旧值，不建议回退；问题是未保留 Job 并发、默认 Scheduler client 限速和控制面资源基线，这些旧字段在 v1.34.8 仍可用，不属于版本兼容性必须删除。
+- 建议：在部署包和实时集群恢复 `concurrent-job-syncs=100`与默认 Scheduler `1000/1000`；对静态 Pod CPU `1/8` 恢复旧值，或给出明确批准和对等测量依据。把有效 args 和 resources 加入重建步骤与验收脚本，再重测受影响的 Kueue/YuniKorn 场景。
+
+### 高：YuniKorn Mutating Webhook 在非 YuniKorn 轮次仍全局匹配并请求已停止的后端
+
+- 位置：部署包 `values/yunikorn.yaml:27-32`、`scripts/install-schedulers.sh:135-145`，源码 `Makefile:527-547,597-605`。
+- 证据：实时 `yunikorn-admission-controller-mutations` 的 `namespaceSelector={}`，rules 匹配所有命名空间的 Pod、Deployment、ReplicaSet、StatefulSet、DaemonSet、Job 和 CronJob，`failurePolicy=Ignore`。`processNamespaces=^bench-yunikorn$` 只是 Webhook 进程内部过滤，不会阻止 API Server 调用 Webhook。而 Kueue/Volcano 轮次会把 `yunikorn-admission-controller` 缩容到 0。API Server 日志在 `2026-08-04T18:33:00Z` 之后记录了至少 1122 次 `Failed calling webhook, failing open admission-webhook.yunikorn.mutate-pods`，直接原因为对 YuniKorn Service 连接被拒绝。
+- 影响：非 YuniKorn 的 Job/Pod 写请求仍进入一条失败 Webhook 调用路径，额外消耗 API Server 和网络/日志资源，并将失败开放延迟混入 Kueue/Volcano 性能结果。这不等价于旧独立集群，也不满足记录中“Admission 只处理 `bench-yunikorn`”的隔离语义。
+- 建议：为 YuniKorn MutatingWebhookConfiguration 增加基于 `benchmark.scheduling/base=yunikorn` 的 Kubernetes `namespaceSelector`，并在安装脚本中以可重复方式固化；保留 YuniKorn 内部 regex 作为第二层防护。单独评估验证 ConfigMap 的 Webhook，若仅用于 `yunikorn/yunikorn-configs`，应按其真实目标命名空间缩小范围。验收应断言非 YuniKorn 命名空间不匹配该 Webhook，且对应 API Server 失败计数不再增长。
+
+### 中：Kueue v0.19 在配置省略时开启了旧基线未启用的 WaitForPodsReady
+
+- 位置：部署包 `manifests/kueue-manager-config.yaml:7-36`，旧基线 `schedulers/kueue/controller/controller_manager_config.yaml:25-33`；上游 v0.19.0 `apis/config/v1beta2/defaults.go:89-105` 及 `CHANGELOG/CHANGELOG-0.19.md:27,88-90`。
+- 证据：当前 ConfigMap 没有 `waitForPodsReady` 或禁用它的 feature gate。Kueue v0.19.0 发布说明明确将 WaitForPodsReady 改为默认开启；默认化源码在字段缺失时创建配置，并设置 30 分钟 timeout/recovery timeout。旧 v0.10.3 基线没有启用该功能；因此简单省略字段在新版本中已不是等价配置。
+- 影响：Kueue 会额外跟踪 PodsReady 状态，并在异常或慢 Pod 情况下应用新的超时、配额释放与重排语义。这是组件升级引入的性能/行为基线变化，目前既未显式批准，也未记录或测试。
+- 建议：若目标是保持旧语义，使用 v0.19 支持的 `DisableWaitForPodsReady` feature gate 显式禁用；若要保留新默认，必须把它列为已批准的版本行为差异，补充对性能与超时语义的验收，不能将当前空缺配置记为旧基线等价。
+
+### 低：部署记录混合了空闲态和测试态，两项审计描述与可重建状态不符
+
+- Volcano：`CLUSTER_DEPLOYMENT_RECORD.md:198-201` 把 actions `enqueue, allocate, backfill, reclaim` 及 `priority/gang + predicates/capacity` 记为“调度器实际配置”。但实时空闲态及重复执行 `install-schedulers.sh` 后的 Helm 最终 ConfigMap 为 chart 默认：无 `reclaim`，并含 `conformance/overcommit/drf/proportion/nodeorder/binpack`，无 `capacity`。源码 `TestInit` 会在 Volcano 测试期间写入前一套配置，`down-volcano` 再恢复空闲快照；因此测试期间设计未丢失，但记录与安装脚本可重建的最终空闲态不一致。
+- YuniKorn：`RESIDENT_CLUSTER_FULL_TEST_REPORT.md:233` 和 `CLUSTER_DEPLOYMENT_RECORD.md:497-503` 称旧基线“无额外吞吐参数/无对应 QPS 项”，但旧基线与当前 `test/yunikorn/init_queue.yaml:7-8` 都明确写有 `kubernetes.qps=1000`、`kubernetes.burst=1000`。当前测试配置没有丢失这两个值，故这是审计记录错误，不是运行回归。
+- 建议：在部署记录中分开列出“安装/空闲基线”与“测试 TestInit 临时基线”，并让验证脚本分阶段断言对应配置；补全 YuniKorn QPS/Burst 审计项。
+
+### 核对后未发现的其他回归
+
+- 没有发现 Kubernetes v1.34.8、1000 个 KWOK Node、三个专用测试命名空间、常驻串行设计或 Volcano `benchmark-root` 被错误回退。
+- Kueue v1beta2/cohortName、六类显式并发键和关闭 Leader Election 均被 v0.19.0 接受；实时启动日志证明 Job、Workload、LocalQueue、Cohort、ClusterQueue、ResourceFlavor 工作线程为 100。旧配置中未启用 Pod integration 的 `Pod: 100` 未被机械复制，这是正确的兼容性处理。
+- Coscheduling Scheduler 的 `parallelism=16`、client `1000/1000`、Leader Election 关闭、Coscheduling MultiPoint/QueueSort 和 Permit `60s` 已生效；Controller worker `100` 已生效，但 QPS/Burst 受上述上游缺陷影响。
+- Volcano 三个组件的 client `1000/1000`、Controller 三类 worker `100`、当前 Admission 集合、Webhook 命名空间隔离及测试期间的层级队列/插件设计有效。
+- YuniKorn Scheduler/Admission 的 CPU-only 资源和移除 `GOMEMLIMIT`/`GOGC` 已生效；内部 process/bypass namespace regex 值正确，但不能替代上述 Kubernetes Webhook 级隔离。
+
+结论：发现 3 个高严重度性能/隔离问题、1 个中严重度版本语义问题和 1 类低严重度记录错误。在上述高、中问题完成判断/修正并重验前，不应将被审提交记为“三套调度方案性能基线已正确恢复”。
+
+### 主 Agent 处理结论与修订结果
+
+| 评审项 | 结论 | 处理 |
+| --- | --- | --- |
+| Coscheduling Controller QPS/Burst | 部分事实接受，修复建议不接受 | v0.32.7 与 v0.34.7 官方源码在相同位置都把已修改的 `config` 丢弃并重新调用 `ctrl.GetConfigOrDie()`。旧基线参数也未实际改变限速，因此构建修复镜像会改变基线。保留相同参数和有效默认行为，修正文档，不改镜像。 |
+| Controller Manager / 默认 Scheduler | 接受 | 恢复 Job 并发 `100`、控制面 CPU `1/8`、默认 Scheduler `1000/1000`，并固化到 Kind 配置、控制面基线脚本和验证脚本；保留已批准的 Controller Manager `5000/10000`。 |
+| YuniKorn Webhook | 接受 | Mutating Webhook 限定到 `benchmark.scheduling/base=yunikorn`；Validating Webhook 限定到 `kubernetes.io/metadata.name=yunikorn`；安装和验证脚本已固化。 |
+| Kueue WaitForPodsReady | 接受 | 设置 `DisableWaitForPodsReady=true`，新 Controller 已正常启动。 |
+| Volcano/YuniKorn 记录 | 接受 | 区分空闲态与测试态，补记 YuniKorn 测试配置的 `1000/1000`。 |
+
+修订应用后，Controller Manager、默认 Scheduler、Kueue 和 YuniKorn 相关对象均已滚动完成；基础集群、调度器和监控验证通过。控制面基线脚本完成无变更重复执行。完整调度器安装脚本首次复跑发现 Kueue field manager 冲突，增加 `--force-conflicts` 后再次从头执行成功，确认最终状态可以由部署包重复构建。
+
+最终判断：评审中需要恢复的旧性能和隔离语义已修正；Coscheduling Controller 保持与旧版本相同的上游有效行为。可以在提交、推送并让服务器同步最终提交后进入场景 1。

@@ -228,9 +228,9 @@ Kueue Controller 持续 OOM 时，Workload 终结处理无法推进。为完成�
 | --- | --- | --- | --- |
 | 全部 8 个调度组件 | CPU request `500m`、limit `8`；无内存 request/limit | 多组不同 CPU 值，并设置 `512Mi` 至 `4Gi` 内存限制 | 全部纠正 |
 | Kueue | client `1000/1000`；兼容 Controller 并发 `100`；leader election 关闭 | client `300/500`；并发 `1` 至 `10`；leader election 开启 | 纠正兼容且启用的字段 |
-| Coscheduling | Scheduler client `1000/1000`；Controller `1000/1000/100`；Permit 默认 `60s` | Scheduler client 已一致；Controller 使用默认 `5/10/1`；Permit `10s` | 纠正 Controller 和 Permit |
+| Coscheduling | Scheduler client `1000/1000`；Controller 参数 `1000/1000/100`，其中 QPS/Burst 因上游缺陷保持默认有效值；Permit 默认 `60s` | Scheduler client 已一致；Controller QPS/Burst 有效值同旧版、workers 回落为 `1`；Permit `10s` | 恢复 Controller 参数与 workers、Permit；不改变旧版相同的 QPS/Burst 有效行为 |
 | Volcano | 三个组件 client `1000/1000`；Controller 三类 worker `100` | Scheduler `2000/2000`，Controller `50/100` 与 `3/5/5`，Admission `50/100` 默认值 | 全部纠正 |
-| YuniKorn | 无额外吞吐参数；无 Go 内存环境变量 | 由内存限制生成 `GOMEMLIMIT`、`GOGC` | 随内存基线一并纠正 |
+| YuniKorn | 测试 ConfigMap 设置 `kubernetes.qps/burst=1000/1000`；无 Go 内存环境变量 | QPS/Burst 仍由源码 TestInit 设置；由内存限制额外生成 `GOMEMLIMIT`、`GOGC` | 保留测试参数，纠正资源与 Go 环境变量 |
 
 没有机械回退以下当前版本差异：Kueue `v1beta2` 配置 API 和 metrics 地址、未启用的 Pod Controller、Volcano 当前版本 Admission 列表、专用命名空间 selector、Volcano `benchmark-root` 队列设计所需的 Scheduler actions/plugins，以及 YuniKorn 1.9 标准 Scheduler 模式。
 
@@ -240,6 +240,7 @@ Kueue Controller 持续 OOM 时，Workload 终结处理无法推进。为完成�
 - Helm values 直接表达其支持的资源、QPS 和并发值；安装脚本对 Kueue 官方 manifest、Coscheduling Controller、Volcano Admission 和 YuniKorn chart 未暴露或强制生成的字段执行可重复覆盖。
 - YuniKorn 1.9 chart 强制要求内存值并生成 Go 内存环境变量，因此保留 chart 输入所需的中间值，Helm 完成后立即把实时 Deployment 精确替换为 CPU-only 资源，并只保留 `NAMESPACE` 环境变量。
 - 当前版本二进制已确认仍支持 Coscheduling Controller 的 `--qps/--burst/--workers` 和 Volcano Admission 的 `--kube-api-qps/--kube-api-burst`；Scheduler Plugins 0.34.7 源码确认 Permit 默认值仍为 `60s`。
+- 后续评审确认 Scheduler Plugins v0.32.7 与 v0.34.7 存在同一个上游实现缺陷：Controller 的 QPS/Burst 参数虽存在，但修改后的 REST config 没有传给 Manager；因此两版有效行为同为默认限速。本轮保留相同参数，不构建自定义镜像改变旧有效基线。
 
 最终实时基线：
 
@@ -247,10 +248,35 @@ Kueue Controller 持续 OOM 时，Workload 终结处理无法推进。为完成�
 | --- | --- |
 | 8 个调度组件 | CPU request `500m`、limit `8`；无内存 request/limit |
 | Kueue | client `1000/1000`；Job、Workload、LocalQueue、Cohort、ClusterQueue、ResourceFlavor 并发均为 `100`；leader election 关闭 |
-| Coscheduling | parallelism `16`；Scheduler client `1000/1000`；Controller `1000/1000/100`；Permit `60s` |
+| Coscheduling | parallelism `16`；Scheduler client `1000/1000`；Controller 参数 `1000/1000/100`，其中有效 QPS/Burst 与旧版相同为上游默认值、workers 为 `100`；Permit `60s` |
 | Volcano | Scheduler、Controller、Admission client 均为 `1000/1000`；Controller Job/GC/PodGroup worker 均为 `100` |
 | YuniKorn | 无 `GOMEMLIMIT`、`GOGC`；队列与 Admission 隔离配置不变 |
 
 应用后 8 个 Deployment 全部滚动完成；`verify-base.sh 1000`、`verify-schedulers.sh`、`verify-monitoring.sh` 均通过，Node 为 `1001/1001 Ready`。首次完整测试中 Kueue 的 `512Mi` OOM 是常驻部署时未经批准改变旧资源基线造成的结果，现已修复；本次修复不修改 `RESIDENT_CLUSTER_SOURCE_CHANGE_PLAN.md`。
 
 下一步按执行规划先提交、推送本次纠正，再进行一轮独立配置评审；评审处理后的最终提交同步到服务器后，才执行场景 1 最小测试。
+
+## 12. 独立配置评审处理与追加修订
+
+独立评审针对提交 `cbd8642f8b641a73c54a662ffd323f7ff93c6825` 提出 3 个高、1 个中和一类低严重度问题。主 Agent 处理如下：
+
+| 评审项 | 判断与处理 |
+| --- | --- |
+| Coscheduling Controller QPS/Burst | 不接受“重建镜像”建议。官方 v0.32.7 与 v0.34.7 源码存在完全相同的 REST config 丢弃逻辑，旧基线的参数同样没有实际生效；修复上游缺陷会改变而不是恢复基线。保留参数并修正文档中的有效值表述。 |
+| 控制面参数遗漏 | 接受。恢复 Controller Manager `concurrent-job-syncs=100`、CPU `1/8`，默认 Scheduler QPS/Burst `1000/1000`、CPU `1/8`；保留已经批准且更高的 Controller Manager QPS/Burst `5000/10000`。 |
+| YuniKorn Webhook 全局匹配 | 接受。Mutating Webhook 仅匹配 `benchmark.scheduling/base=yunikorn`，Validating Webhook 仅匹配 `kubernetes.io/metadata.name=yunikorn`，内部 regex 继续作为第二层防护。 |
+| Kueue WaitForPodsReady | 接受。设置 `DisableWaitForPodsReady=true`，保持旧版省略配置时的关闭语义。 |
+| Volcano/YuniKorn 记录错误 | 接受。记录区分 Volcano/YuniKorn 空闲态和 TestInit 测试态，并补记 YuniKorn `kubernetes.qps/burst=1000/1000`。 |
+
+部署包新增可重复执行的控制面基线脚本和 YuniKorn Webhook 作用域脚本，创建集群与安装调度器流程会自动调用；验证脚本新增控制面参数、全部调度 Deployment 精确资源和 YuniKorn selector 断言。
+
+应用与验证结果：
+
+- Controller Manager 和默认 Scheduler 静态 Pod 均完成替换并 Ready；对应参数和 CPU `1/8` 已生效。
+- Kueue 新 Pod 以 `DisableWaitForPodsReady=true` 正常启动。
+- YuniKorn 两类 Webhook selector 已生效。
+- `configure-control-plane-baseline.sh` 重复执行成功且没有无意义重启。
+- 首次完整安装脚本复跑暴露 Kueue server-side apply 与 JSON Patch 的字段所有权冲突；增加显式字段接管后，再次从头复跑成功。
+- 基础集群、调度器、监控验证全部通过，Node 为 `1001/1001 Ready`。
+
+这些修订恢复遗漏的旧性能/隔离语义，没有改变已批准的常驻集群源码设计，因此仍不修改 `RESIDENT_CLUSTER_SOURCE_CHANGE_PLAN.md`。

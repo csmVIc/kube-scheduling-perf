@@ -97,11 +97,21 @@ Prometheus Service 还自动分配了第二个 NodePort `30104` 给 Service 的 
 
 - `--kube-api-qps=5000`
 - `--kube-api-burst=10000`
+- `--concurrent-job-syncs=100`
 - `--node-monitor-grace-period=7200s`
 - `--node-monitor-period=3600s`
 - `--cluster-cidr=10.244.0.0/16`
 
 长 Node 监控周期用于降低大量虚拟节点带来的状态检查开销。它也会让真实节点故障感知明显变慢，因此本集群不应作为通用 Kubernetes 集群使用。
+
+Controller Manager 静态 Pod 的 CPU request/limit 为 `1/8`，不设置内存 request/limit。
+
+### 默认 Scheduler 自定义参数
+
+- `--kube-api-qps=1000`
+- `--kube-api-burst=1000`
+
+默认 Scheduler 静态 Pod 的 CPU request/limit 为 `1/8`，不设置内存 request/limit。Kueue 非 Gang 场景未指定 `schedulerName`，会经过该 Scheduler；Gang 场景使用 Coscheduling，Volcano 和 YuniKorn 使用各自 Scheduler。
 
 ### etcd 自定义参数
 
@@ -181,9 +191,9 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 ### 具体安装路径
 
 - Volcano：`helm upgrade --install` 使用本地 `volcano-1.15.1.tgz` 和 `values/volcano.yaml`；安装脚本随后为 Admission 补齐 chart 未暴露的 API client QPS/Burst 参数，并核对三个 Deployment 的统一资源基线。
-- Kueue：本地 `kueue-v0.19.0.yaml` 使用 `kubectl apply --server-side`；随后应用本地 `kueue-manager-config.yaml`，以 JSON Patch 覆盖官方 manifest 的资源配置，重启 Controller，并运行 Webhook 作用域修正脚本。
+- Kueue：本地 `kueue-v0.19.0.yaml` 使用带字段接管的 `kubectl apply --server-side --force-conflicts`；随后应用本地 `kueue-manager-config.yaml`，以 JSON Patch 覆盖官方 manifest 的资源配置，重启 Controller，并运行 Webhook 作用域修正脚本。字段接管用于保证资源覆盖后的重复安装不会因 field manager 冲突而中止。
 - Coscheduling：本地 source tarball 解压后，先 server-side apply `manifests/coscheduling/crd.yaml` 和 `config/crd/bases/scheduling.x-k8s.io_elasticquotas.yaml`，再从 `manifests/install/charts/as-a-second-scheduler` 进行 Helm 安装；最后用本地 ConfigMap 覆盖 scheduler 配置，为 Controller 补齐 QPS/Burst/Workers 参数并重启。
-- YuniKorn：`helm upgrade --install` 使用本地 `yunikorn-1.9.0.tgz` 和 `values/yunikorn.yaml`；由于 1.9.0 chart 强制渲染内存字段和 Go 内存环境变量，安装脚本随后以 JSON Patch 精确恢复 CPU-only 资源基线，并移除 `GOMEMLIMIT`、`GOGC`。
+- YuniKorn：`helm upgrade --install` 使用本地 `yunikorn-1.9.0.tgz` 和 `values/yunikorn.yaml`；由于 1.9.0 chart 强制渲染内存字段和 Go 内存环境变量，安装脚本随后以 JSON Patch 精确恢复 CPU-only 资源基线并移除 `GOMEMLIMIT`、`GOGC`，再把 Mutating Webhook 限定到 `bench-yunikorn` 标签、Validating Webhook 限定到 `yunikorn` 命名空间。
 - 监控：`helm upgrade --install` 使用本地且已校验的 kube-prometheus-stack tgz；Image Renderer 由 chart 部署；Audit Exporter、审计 Dashboard 和 `perf` Dashboard 均由部署目录中的本地文件 apply；安装脚本同时安装并启用 Grafana 8080 systemd 转发服务。
 
 ## 8. 调度器实际配置
@@ -196,9 +206,8 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 - Agent Scheduler：关闭
 - Sharding Controller：关闭
 - Webhook 目标命名空间标签：`benchmark.scheduling/base=volcano`
-- Scheduler actions：`enqueue, allocate, backfill, reclaim`
-- 第一层插件：`priority`、`gang`，其中 gang `enablePreemptable=false`
-- 第二层插件：`predicates`、`capacity`，其中 capacity `enableHierarchy=false`
+- 安装后空闲配置：actions 为 `enqueue, allocate, backfill`；第一层为 `priority/gang/conformance`，第二层为 `overcommit/drf/predicates/proportion/nodeorder/binpack`
+- 测试期间配置：`TestInit` 临时切换为 `enqueue, allocate, backfill, reclaim`；第一层为 `priority/gang`，第二层为 `predicates/capacity`，以支持 `benchmark-root` 层级队列；`make down` 恢复测试前空闲配置
 - Volcano Job CRD：`jobs.batch.volcano.sh/v1alpha1`，served/storage 均为 true
 - Scheduler、Controller、Admission API client QPS/Burst 均为 `1000/1000`
 - Controller 的 Job、GC、PodGroup worker 均为 `100`
@@ -222,6 +231,7 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 - `leaderElect=false`
 - API client：`qps=1000`、`burst=1000`
 - 当前启用且名称兼容的 Controller 并发：Job、Workload、LocalQueue、Cohort、ClusterQueue、ResourceFlavor 均为 `100`
+- `DisableWaitForPodsReady=true`，显式保持 v0.10.3 省略该项时的关闭语义
 - Workload CRD 同时 served `v1beta1` 与 `v1beta2`，storage 版本为 `v1beta2`
 - 资源：Requests `500m CPU`，Limits `8 CPU`，不设置内存 request/limit
 
@@ -241,7 +251,8 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 - `leaderElect=false`
 - 启用 `Coscheduling` MultiPoint 和 QueueSort；QueueSort 中禁用其他插件
 - `permitWaitingTimeSeconds=60`
-- Scheduler Plugins Controller 参数：`qps=1000`、`burst=1000`、`workers=100`
+- Scheduler Plugins Controller 配置参数：`qps=1000`、`burst=1000`、`workers=100`
+- v0.32.7 与 v0.34.7 的同一上游实现都会丢弃前两个参数所修改的 REST config，因此有效 QPS/Burst 都是 controller-runtime 默认值；保留参数是为了配置一致，未构建自定义镜像改变旧基线行为；`workers=100` 正常生效
 
 资源配置：
 
@@ -259,9 +270,11 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 - Admission Deployment：`yunikorn-admission-controller`，`1` 副本
 - 内嵌 Admission Controller：开启
 - Web Service/UI：关闭
-- Admission 只处理 `^bench-yunikorn$`
+- Mutating Webhook 的 Kubernetes `namespaceSelector` 只匹配 `benchmark.scheduling/base=yunikorn`，进程内部再以 `^bench-yunikorn$` 二次过滤
+- Validating Webhook 只匹配 `kubernetes.io/metadata.name=yunikorn`，用于配置 ConfigMap
 - Admission 绕过 `^(kube-system|yunikorn)$`
-- 没有挂载自定义队列 ConfigMap；当前使用 YuniKorn 内置默认队列结构，测试队列为 `root.default`
+- 空闲时没有 `yunikorn-configs`，使用内置 placement 规则，`bench-yunikorn` 的动态队列为 `root.bench-yunikorn`
+- 测试期间 `TestInit` 临时创建专用 `queues.yaml`，同时设置 `kubernetes.qps=1000`、`kubernetes.burst=1000`；`make down` 恢复测试前空闲状态
 - Scheduler 和 Admission 均未设置 `GOMEMLIMIT`、`GOGC`，使用与旧基线一致的 Go runtime 默认行为
 
 资源配置：
@@ -453,29 +466,31 @@ cd /root/benchmark-1348-deploy
 | 文件 | SHA-256 |
 |---|---|
 | `versions.env` | `9802258aa7437b303934ab306442f5f48d4ba7466802ff93ed0371a8932c7305` |
-| `kind-config.yaml` | `bd10f1e3c27816f08be50741ce6ad58924bfde478249ac249ee4d3f52597e8a8` |
+| `kind-config.yaml` | `bb5e52c0339cd90862baaea9f404b7994afa224e17a3f505b2e888cf4c848286` |
 | `values/volcano.yaml` | `e2bbd980356f744873887498bcc50da99d5a7ee6d2abbbfade6c135078271316` |
 | `values/coscheduling.yaml` | `3bc034780c3681265dd399556abf80ff8b09817c301c3a116b183e2fb3443920` |
 | `values/yunikorn.yaml` | `a2955429e78d203c17a9b4c21de03ab1aa04a055a57989d16fcba9d7eacb1856` |
 | `values/monitoring.yaml` | `10ade921cffcb719201bbaa01d3f924d17eff4f01904a4a70d0ba19d1e51f566` |
-| `manifests/kueue-manager-config.yaml` | `d57eb6b23529e5551cdacb9185bc65d6516da15bdf04d2850dce9b3026c7cc26` |
+| `manifests/kueue-manager-config.yaml` | `4ef6994a2568fc4ad9b5aac90b27107cc3c985405810d274d99d70425497057a` |
 | `manifests/coscheduling-configmap.yaml` | `734c327e14ca405679e5bb57e875386aa11981e17dfbe7e22a3749b2efc4ebbe` |
 | `manifests/benchmark-namespaces.yaml` | `e766ab1fc5c3de100f727a5ac46fcaee8ae3e9d0eb9eb682c4769b715fbba74f` |
 | `manifests/audit-exporter.yaml` | `e784ca7241ffb9b1b3055505643d3a34b92b55e47395bd6670562e393d1039a8` |
 | `manifests/audit-dashboard.yaml` | `558dfb641b07815b1dba8467a7939516be88ce3b07016f448d08e775c81d82fb` |
 | `manifests/perf-dashboard.json` | `a3ea7661ba0023b84f07a46d1fd9afefac5899c725387c37e4649e6e5d5acec2` |
 | `manifests/scheduler-smoke-tests.yaml` | `8574169b65bd048ed085c344bdbf6650cae18773c44001a7bef1bfc0acd8aa45` |
-| `scripts/create-canary-cluster.sh` | `c8d81b51990e97bcef387cc6a8f47f8cd253d17c2684cb910b1e9ca3899c03ec` |
+| `scripts/create-canary-cluster.sh` | `796c7aee3595252d492d937a6ebb76c7f6fd609806a419aae746c7b42c14ce03` |
+| `scripts/configure-control-plane-baseline.sh` | `8e533ca29ef7b45751fa5c178f04cf088ae55f74d878b17907e6d1c2831d7a47` |
 | `scripts/install-kwok-canary.sh` | `24ec70a2d257b5615ee67c5fd6e0e743542aed552d209683eed33f8ff19cbcb5` |
 | `scripts/prepare-scheduler-artifacts.sh` | `ef0fc3f6d828d9e98c0cc8dcbe4ff1dfbb6a603ba62ec93a3c2feee7c1f574c1` |
-| `scripts/install-schedulers.sh` | `d9e085d5782ab19fd75e7d49648764ccb53e49eb6e6b648af354e7517e267f80` |
+| `scripts/install-schedulers.sh` | `d974402272616e26f95f3396525a9e35197df59e4f60fe224f47cd812bc08438` |
 | `scripts/scope-kueue-webhooks.sh` | `f3be442a47f5992e78b37b0b4c2f4dac672cc79fc683f44cb206c9e44a96acdc` |
+| `scripts/scope-yunikorn-webhooks.sh` | `251569cb2fbcd8072141e04e3b1592e6702e85429fd95e179da4e6f282ab1c22` |
 | `scripts/prepare-monitoring-artifacts.sh` | `04bdaafab302f228bc7c1d843531db0059dbadca3b7effda3a9e576704caf020` |
 | `scripts/install-monitoring.sh` | `c05b6909f00556bd2f26810f899fe69236a9edeec9b20e19ba78ed11ff495994` |
 | `scripts/scale-kwok-nodes.sh` | `6d4bfdf53b644f04d661c55698caad4b9303824752a2859ae5c235fc54e8960c` |
 | `scripts/run-scheduler-smoke-tests.sh` | `e1258ff299dc28162c59ba507365d234308e6344e42449d9582c16e89959d6cb` |
-| `scripts/verify-base.sh` | `37bbd00b6aede1f567ff8eb1c45ba6fb40cebe1bd4df0fa8bd7c23a0cbf0b339` |
-| `scripts/verify-schedulers.sh` | `fc2ad281b5e6569b642ea28f379e659f0fbbbf612c8f3b7faa45001e3c79daa6` |
+| `scripts/verify-base.sh` | `af35c07b047896d6d0109324080bf5132f6b1a96b57429ca9dac7fdb037f7fcd` |
+| `scripts/verify-schedulers.sh` | `01d2beb821119b578c71fe1776b3aa8e654b4a8f3f8be1a8a6f45569415a3fb2` |
 | `scripts/verify-monitoring.sh` | `a13c5acea6793d15de610420e4ed14f43c06771c8824029d3b62e63adbbc2e1d` |
 | `systemd/benchmark-grafana-port-forward.service` | `23952b1b52fd95bdaab07f91abf1b695a97a52ef99a95dce5a0a27ba84a94ec1` |
 | `deployed-image-lock.md` | `34a0895152408a68a78533b78dce0a632a6d8e6971e56ac88f9004ffe7583957` |
@@ -497,7 +512,9 @@ cd /root/benchmark-1348-deploy
 - 比较常驻集群改造前提交 `6ce46e0cd2464a5c03331f8ee756980719ca4d69`、当前部署包和实时 Deployment，确认 8 个调度组件的资源配置在常驻部署时发生了未经批准的变化。
 - 将 Kueue、Coscheduling、Volcano、YuniKorn 的 8 个调度组件统一恢复为 CPU request `500m`、limit `8`，不设置内存 request/limit。
 - Kueue 恢复 API client `1000/1000`、兼容且启用的六类 Controller 并发 `100` 和关闭 Leader Election；未机械添加未启用的 Pod Controller。
-- Coscheduling 保留当前版本默认 parallelism `16`，恢复 Controller `qps/burst/workers=1000/1000/100` 和旧基线等价的 Permit 等待 `60s`。
+- Coscheduling 保留当前版本默认 parallelism `16`，恢复 Controller 参数 `qps/burst/workers=1000/1000/100` 和旧基线等价的 Permit 等待 `60s`；v0.32.7 和 v0.34.7 的相同上游缺陷会让 Controller 的 QPS/Burst 实际保持默认值，因此未额外改变有效行为。
 - Volcano 恢复 Scheduler、Controller、Admission API client `1000/1000` 和 Controller 三类 worker `100`；保留已批准的新版 Admission 集合、命名空间隔离以及 `benchmark-root` 所需的 Scheduler actions/plugins。
-- YuniKorn 没有旧基线对应的 QPS/并发项；恢复统一 CPU-only 资源，并移除 chart 因内存限制生成的 `GOMEMLIMIT`、`GOGC`。
+- YuniKorn 测试态继续使用旧基线已有的 `kubernetes.qps/burst=1000/1000`；恢复统一 CPU-only 资源，并移除 chart 因内存限制生成的 `GOMEMLIMIT`、`GOGC`。
 - 本地部署包与远端部署包的 6 个变更文件逐项 SHA-256 一致；执行 `install-schedulers.sh` 后，基础集群、调度器和监控验证全部通过，Node 为 `1001/1001 Ready`。
+- 独立评审后补齐 Controller Manager `concurrent-job-syncs=100`、Controller Manager 与默认 Scheduler CPU `1/8`、默认 Scheduler QPS/Burst `1000/1000`，显式禁用 Kueue WaitForPodsReady，并在 Kubernetes Webhook 层隔离 YuniKorn。
+- `configure-control-plane-baseline.sh` 与完整 `install-schedulers.sh` 均完成重复执行验证；首次复跑发现并修复 Kueue server-side apply 字段冲突，修复后从头复跑成功。
