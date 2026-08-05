@@ -340,7 +340,7 @@ Grafana 启用了匿名 Viewer 和 `/grafana/` 子路径。`perf` Dashboard 由 
 - 持久暴露方式：systemd 服务将宿主机 `31005` 转发到 Traefik ClusterIP Service 的 `80` 端口
 - Kind 端口映射：不新增 `extraPortMappings`；现有 Kind 集群不重建，因此 `31005` 不是 Docker/Kind 端口映射
 
-官方 chart 制品来源为 `https://github.com/traefik/traefik-helm-chart/releases/download/v40.2.0/traefik-40.2.0.tgz`，固定 SHA-256 为 `b73d0159fc1222cc9bdaefde80000a9bad2dfe81de4caed14b9509b3bf6c1df9`。部署后计划使用浅色入口 `http://104.105.137.213:31005/grafana/d/perf/?theme=light`；部署前仍使用现有 `31004` 或回环 `8080` 入口。
+官方 chart 制品来源为 `https://traefik.github.io/charts/traefik/traefik-40.2.0.tgz`，固定 SHA-256 为 `b73d0159fc1222cc9bdaefde80000a9bad2dfe81de4caed14b9509b3bf6c1df9`。部署后计划使用浅色入口 `http://104.105.137.213:31005/grafana/d/perf/?theme=light`；部署前仍使用现有 `31004` 或回环 `8080` 入口。
 
 ### Audit Exporter
 

@@ -9,7 +9,7 @@ This directory installs the persistent Grafana Ingress used by the resident benc
 - External endpoint: `http://104.105.137.213:31005/grafana/d/perf/?theme=light`.
 - Exposure: systemd keeps a host-side port-forward from TCP `31005` to the controller Service. This is necessary because the existing Kind cluster cannot gain another Docker port mapping without being rebuilt.
 
-The chart is downloaded into `/root/benchmark-1348-deploy/downloads/` only when missing and is accepted only after its pinned SHA-256 matches. `--skip-crds` is used because this deployment consumes only the built-in Kubernetes Ingress API.
+The chart is downloaded from Traefik's official Helm repository into `/root/benchmark-1348-deploy/downloads/` only when missing and is accepted only after its pinned SHA-256 matches. `--skip-crds` is used because this deployment consumes only the built-in Kubernetes Ingress API.
 
 Install or reconcile:
 
