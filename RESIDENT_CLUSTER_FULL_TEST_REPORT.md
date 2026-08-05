@@ -353,3 +353,62 @@ Kueue Controller 持续 OOM 时，Workload 终结处理无法推进。为完成�
 | Monitoring | Audit Exporter、Prometheus、Grafana、Image Renderer 和 Dashboard 全部通过 |
 
 本轮不需要修改 `RESIDENT_CLUSTER_SOURCE_CHANGE_PLAN.md`：配置纠正恢复的是改造前基线，SSH 中断也没有暴露新的源码设计问题。
+
+## 16. 常驻集群第一轮完整测试（失败）
+
+### 16.1 执行信息
+
+| 项目 | 内容 |
+| --- | --- |
+| 被测 Commit | `73ae14df7f29e6f4e81e34f91e286e1ff7f278cd` |
+| 命令 | `make` |
+| 独立会话 | `tmux resident-full-20260805T131822Z`，SSH 断开或网络波动不会终止测试 |
+| 开始时间 | `2026-08-05T13:20:37Z` |
+| 结束时间 | `2026-08-05T13:44:51Z` |
+| 总耗时 | `1453.961s`（`24m13.961s`） |
+| 退出码 | `2` |
+| 结论 | 场景 3 失败；场景 4 至 8 未执行，不能验收为完整测试通过 |
+| 失败归档 | 服务器 `/root/github/kube-scheduling-perf/results/failed-full-20260805T132037Z` |
+
+### 16.2 场景执行结果
+
+| 场景 | 参数 | 时间 | 耗时 | 结果目录 | 结果 |
+| --- | --- | --- | ---: | --- | --- |
+| 1 | 非 Gang，`10000 job × 1 pod` | `13:20:37Z` 至 `13:29:19Z` | `8m42s` | `results/1785936500` | 三套方案通过，结果保存完成 |
+| 2 | 非 Gang，`500 job × 20 pod` | `13:29:19Z` 至 `13:34:24Z` | `5m05s` | `results/1785936806` | 三套方案通过，结果保存完成 |
+| 3 | 非 Gang，`20 job × 500 pod` | `13:34:24Z` 至 `13:44:51Z` | `10m27s` | 未生成正式目录 | Kueue、Volcano 调度通过；Volcano 指标屏障失败后产生连锁失败，YuniKorn 超时 |
+| 4–8 | 剩余非 Gang 与 Gang 场景 | 未执行 | — | — | 未执行 |
+
+共计划执行 `24` 组调度器子测试。本轮执行了 `9` 组 `TestBatchJob`：`8` 组通过、`1` 组超时、`15` 组未执行；执行了 `9` 组 Prometheus 抓取屏障：`8` 组通过、`1` 组失败、`15` 组未执行。
+
+已成功保存的两个结果目录都包含 3 份非空审计日志、8 张 Grafana PNG、环境信息和毫秒级结果时间窗。场景 1 的结果时间窗为 `1785936037922` 至 `1785936482744` 毫秒。
+
+### 16.3 已完成子测试明细
+
+| 场景 | 调度方案 | TestBatchJob | Prometheus 抓取屏障 |
+| --- | --- | ---: | --- |
+| 1 | Kueue | `118.45s` | 通过，`total=140131` |
+| 1 | Volcano | `118.03s` | 通过，`total=130076` |
+| 1 | YuniKorn | `118.03s` | 通过，`total=120058` |
+| 2 | Kueue | `46.48s` | 通过，`total=64944` |
+| 2 | Volcano | `44.06s` | 通过，`total=65059` |
+| 2 | YuniKorn | `44.22s` | 通过，`total=70125` |
+| 3 | Kueue | `50.25s` | 通过，`total=61181` |
+| 3 | Volcano | `40.13s` | 失败，Prometheus 连接被重置 |
+| 3 | YuniKorn | `160s`，超时 | 通过，`total=10057` |
+
+### 16.4 根因与连锁影响
+
+测试前 Prometheus 主容器重启次数为 `0`。场景 3 的 Volcano 子轮次结束后，Prometheus 在 `2026-08-05T13:36:06Z` 因 `OOMKilled` 退出，退出码为 `137`，主容器重启次数变为 `1`。它完成 WAL 回放并在约 `13:36:45Z` 恢复服务；期间指标屏障在 `13:36:35Z` 收到 `curl: (56) Recv failure: Connection reset by peer` 并立即退出。
+
+Prometheus 实时资源配置包含 `requests.memory=1Gi`、`limits.memory=4Gi`。常驻集群改造前提交 `6ce46e0cd2464a5c03331f8ee756980719ca4d69` 的 Prometheus CR 没有配置 resources；集群部署方案也没有批准新增 Prometheus 内存上限。因此本轮首要根因是新集群部署时加入的 `4Gi` 内存限制不符合旧源码基线，也不足以承载当前版本在完整压测中的数据量，不是调度器性能用例本身失败。
+
+Volcano 指标屏障异常退出，使本轮状态尚未恢复；随后 YuniKorn 的准备阶段检测到现存 Volcano 状态并失败，但原有串行命令结构继续执行了 YuniKorn 测试，最终造成调度超时和清理阶段 API 限流超时。这些是 Prometheus OOM 后的连锁结果，不作为独立调度器缺陷判断。
+
+### 16.5 唯一一轮修复
+
+- 从 Prometheus 部署 values 中移除整个 resources 配置，恢复旧源码“不设置 CPU/内存 request 或 limit”的行为，避免 `4Gi` cgroup 上限再次终止 Prometheus。
+- 常驻模式新增的 `wait-audit-metrics-scraped` 在 Audit Exporter 或 Prometheus 请求短暂失败、响应暂时不可解析时继续使用原有等待窗口重试；成功条件、稳定样本条件和超时失败语义不变。
+- 不改动既有串行测试结构，不修改 `RESIDENT_CLUSTER_SOURCE_CHANGE_PLAN.md`，也不修改已明确排除的 `/Users/csmvic/Documents/Codex/2026-08-03/k8s-1-35/`。
+
+失败后执行 `make down` 返回 `0`；`.resident-state` 已清除，实验资源零残留，`1001/1001` Node、8 个调度组件及全部监控组件恢复健康。修复提交并推送后，只再执行一轮完整测试；无论第二轮成功或失败都不再修复或执行第三轮。

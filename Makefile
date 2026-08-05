@@ -297,23 +297,41 @@ reset-audit-exporter:
 wait-audit-metrics-scraped:
 	@test -n "$(SCHEDULER)" || (echo 'SCHEDULER is required' >&2; exit 1)
 	@set -eu; \
-		last=-1; stable=0; stable_at=0; \
-		for attempt in $$(seq 1 $(RESULT_METRICS_TIMEOUT_SECONDS)); do \
+		last=-1; stable=0; stable_at=0; attempt=0; \
+		deadline=$$(( $$(date +%s) + $(RESULT_METRICS_TIMEOUT_SECONDS) )); \
+		while test "$$(date +%s)" -lt "$$deadline"; do \
+			attempt=$$((attempt + 1)); \
 			sleep 1; \
-			exporter_metrics="$$( $(KUBECTL_CMD) get --raw '/api/v1/namespaces/$(AUDIT_EXPORTER_NAMESPACE)/services/$(AUDIT_EXPORTER_DEPLOYMENT):8080/proxy/metrics' )"; \
+			if ! exporter_metrics="$$( $(KUBECTL_CMD) --request-timeout=5s get --raw '/api/v1/namespaces/$(AUDIT_EXPORTER_NAMESPACE)/services/$(AUDIT_EXPORTER_DEPLOYMENT):8080/proxy/metrics' 2>/dev/null )"; then \
+				stable=0; stable_at=0; \
+				printf 'audit_metrics_retry scheduler=%s attempt=%s source=exporter\n' '$(SCHEDULER)' "$$attempt" >&2; \
+				continue; \
+			fi; \
 			exporter_total="$$(printf '%s\n' "$$exporter_metrics" | awk '/^api_requests_total\{/{sum += $$NF} END {printf "%.0f", sum + 0}')"; \
-			prometheus_response="$$(curl -fsS --get --data-urlencode 'query=sum(api_requests_total{cluster="$(SCHEDULER)"})' http://127.0.0.1:31003/api/v1/query)"; \
-			prometheus_total="$$(printf '%s\n' "$$prometheus_response" | jq -er 'if .status == "success" and (.data.result | length) > 0 then .data.result[0].value[1] else "0" end')"; \
-			prometheus_response="$$(curl -fsS --get --data-urlencode 'query=max(timestamp(api_requests_total{cluster="$(SCHEDULER)"}))*1000' http://127.0.0.1:31003/api/v1/query)"; \
-			prometheus_timestamp="$$(printf '%s\n' "$$prometheus_response" | jq -er 'if .status == "success" and (.data.result | length) > 0 then .data.result[0].value[1] else "0" end')"; \
 			if test "$$exporter_total" = "$$last"; then stable=$$((stable + 1)); else stable=0; stable_at=0; fi; \
 			if test "$$stable" -ge 2 && test "$$stable_at" = 0; then stable_at="$$(date +%s%3N)"; fi; \
+			last="$$exporter_total"; \
+			if ! prometheus_response="$$(curl -fsS --connect-timeout 2 --max-time 5 --get --data-urlencode 'query=sum(api_requests_total{cluster="$(SCHEDULER)"})' http://127.0.0.1:31003/api/v1/query)"; then \
+				printf 'audit_metrics_retry scheduler=%s attempt=%s source=prometheus-total\n' '$(SCHEDULER)' "$$attempt" >&2; \
+				continue; \
+			fi; \
+			if ! prometheus_total="$$(printf '%s\n' "$$prometheus_response" | jq -er 'if .status == "success" and (.data.result | length) > 0 then .data.result[0].value[1] else "0" end')"; then \
+				printf 'audit_metrics_retry scheduler=%s attempt=%s source=prometheus-total-response\n' '$(SCHEDULER)' "$$attempt" >&2; \
+				continue; \
+			fi; \
+			if ! prometheus_response="$$(curl -fsS --connect-timeout 2 --max-time 5 --get --data-urlencode 'query=max(timestamp(api_requests_total{cluster="$(SCHEDULER)"}))*1000' http://127.0.0.1:31003/api/v1/query)"; then \
+				printf 'audit_metrics_retry scheduler=%s attempt=%s source=prometheus-timestamp\n' '$(SCHEDULER)' "$$attempt" >&2; \
+				continue; \
+			fi; \
+			if ! prometheus_timestamp="$$(printf '%s\n' "$$prometheus_response" | jq -er 'if .status == "success" and (.data.result | length) > 0 then .data.result[0].value[1] else "0" end')"; then \
+				printf 'audit_metrics_retry scheduler=%s attempt=%s source=prometheus-timestamp-response\n' '$(SCHEDULER)' "$$attempt" >&2; \
+				continue; \
+			fi; \
 			if test "$$stable" -ge 2 && test "$$exporter_total" -gt 0 && \
 				awk -v observed="$$prometheus_total" -v expected="$$exporter_total" 'BEGIN { exit !(observed >= expected) }' && \
 				awk -v observed="$$prometheus_timestamp" -v expected="$$stable_at" 'BEGIN { exit !(observed >= expected) }'; then \
 				printf 'audit_metrics_scraped scheduler=%s total=%s sample_millis=%s\n' '$(SCHEDULER)' "$$exporter_total" "$$prometheus_timestamp"; exit 0; \
 			fi; \
-			last="$$exporter_total"; \
 		done; \
 		echo 'Timed out waiting for Audit Exporter metrics to reach Prometheus for $(SCHEDULER)' >&2; exit 1
 
