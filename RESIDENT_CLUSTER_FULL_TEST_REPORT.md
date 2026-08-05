@@ -18,9 +18,12 @@
 | 阶段 | Commit | 说明 |
 | --- | --- | --- |
 | 常驻集群初版 | `9833dcdeea5fe820fcd6d49f98bbd8e7e3c36367` | `refactor: run scheduler benchmarks on resident cluster` |
-| 评审修复及最终被测版本 | `add6e843ff31ae3c232cfb16c807077cc89245f6` | `fix: harden resident cluster benchmark recovery` |
+| 初版评审修复 | `add6e843ff31ae3c232cfb16c807077cc89245f6` | `fix: harden resident cluster benchmark recovery` |
+| 基线纠正后场景 1 最小测试 | `3fedf92c82fce58ca12f1e1551443a55b4e79e97` | 三套调度方案基线纠正和独立评审处理完成 |
+| 第一轮独立完整测试 | `73ae14df7f29e6f4e81e34f91e286e1ff7f278cd` | 场景 3 Prometheus OOM，触发唯一一轮修复 |
+| 第二轮独立完整测试（最终被测） | `c3805c84e68fa233f76041ec720b7ccbbb20cbe8` | `fix: tolerate transient metrics outages` |
 
-服务器仓库在测试前已重置并同步到 `add6e843ff31ae3c232cfb16c807077cc89245f6`。
+服务器仓库在每轮测试前均同步到表中的对应 Commit；本报告最终性能验收所测试的源码版本为 `c3805c84e68fa233f76041ec720b7ccbbb20cbe8`。
 
 ### 2.2 集群和组件
 
@@ -77,7 +80,9 @@ make serial-test \
 
 验证过程中曾在 `make prepare-yunikorn` 已包含 `TestInit` 后，又人工重复执行了一次 `make test-init-yunikorn`，因此得到 `configmaps "yunikorn-configs" already exists`。这是重复操作造成的预期冲突，不是源码缺陷，也没有据此修改源码或增加测试轮次。
 
-## 5. 完整测试
+## 5. 初始部署基线完整测试（历史记录）
+
+第 5 至 10 节记录的是 `add6e843...` 和错误 `512Mi` Kueue 基线下的初始阶段现场，只保留用于说明问题发现过程。其“最终”“停止”和资源建议均只适用于当轮，已由第 11 至 17 节的基线纠正、复测和最终结论取代。
 
 ### 5.1 执行信息
 
@@ -190,7 +195,7 @@ Kueue Controller 持续 OOM 时，Workload 终结处理无法推进。为完成�
 
 该临时扩容只用于故障后的资源恢复，不是完整测试修复；没有再次运行完整测试，也没有把该配置写入源码或部署记录。
 
-## 9. 最终健康检查
+## 9. 初始阶段当轮健康检查
 
 | 检查项 | 结果 |
 | --- | --- |
@@ -207,14 +212,16 @@ Kueue Controller 持续 OOM 时，Workload 终结处理无法推进。为完成�
 | Monitoring 验证 | Audit Exporter、Prometheus、Grafana、Image Renderer 和 Dashboard 均通过 |
 | 服务器 Git | HEAD 为 `add6e843...`；仅最小测试结果目录未跟踪 |
 
-## 10. 未解决风险和后续建议
+## 10. 初始阶段当轮风险记录（后续已处理）
+
+本节是当时的风险判断。第 11 节随后确认 `512Mi` 限制是常驻部署未经批准引入的偏差，并已恢复旧源码 CPU-only 基线；因此下面前两项不再是当前资源基线建议。
 
 - 本次 10000 Job 场景中，Kueue Controller 在 512 MiB 内存限制下发生 OOM；该限制是否构成稳定的容量瓶颈仍未确认。下一轮应先进行专项复测，再决定是否调整固定集群 Kueue 资源基线。
 - 如果保持 512 MiB，需要重新评估 10000 Job 场景、350 秒超时和 TTL/终结收敛预期是否仍是有效基线。
 - `serial-test` 当前使用分号串行，子阶段失败后仍可能继续执行后续阶段。本次改造按用户确认的范围未增加退出保护；完整测试出现错误时仍需人工监控。
 - 服务器 `/tmp/resident-full-test.log` 不是持久存储，后续若需要保留原始完整日志，应在服务器清理或重启前另行归档。
 
-本报告生成后，按执行方案停止：不修复完整测试问题、不重跑、不创建新提交、不再次推送。
+该初始阶段在当时按对应执行方案停止，没有在同一轮内修复或重跑；后续经新的用户授权进入第 11 节起的基线纠正与复测流程。
 
 ## 11. 三套调度方案基线审计与首次纠正
 
@@ -505,6 +512,8 @@ Wrapper 退出码为 `0` 只表示顶层命令执行到末尾，不代表 24 组
 
 - 64 张 Grafana PNG 都显示 `No data`，不能作为有效的图形实验结果。使用各目录历史时间窗直接查询 Prometheus 时，除场景 5 本就无效的 Volcano 子测试外，Kueue、Volcano、YuniKorn 的 Created 和 Scheduled 原始指标均可查。
 - 从场景 4 开始，审计文件中出现稀疏 NUL 区段，因此这些文件不能按干净的 JSONL 审计日志验收或直接解析。
+
+运行目录和失败归档都保存了追加核验文件：`postflight-panel5-prometheus.tsv`、`postflight-image-sha256.tsv`、`postflight-audit-integrity.tsv`、`postflight-prometheus-memory.txt` 和修正后的 `duration.txt`，分别记录原始指标查询、图片摘要、审计文件首个非 NUL 偏移、Prometheus RSS 峰值与精确总耗时。
 
 ### 17.6 最终决定
 

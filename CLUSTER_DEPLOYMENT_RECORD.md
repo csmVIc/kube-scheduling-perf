@@ -5,14 +5,14 @@
 本文记录远端调度基准集群的实际部署状态、安装来源、版本、关键配置、镜像摘要、重建顺序和已知风险，供故障恢复、版本更新和实验环境审计使用。
 
 - 初始记录时间：`2026-08-03T12:35:49Z`（北京时间 `2026-08-03 20:35:49`）
-- 最近变更时间：`2026-08-05`，纠正常驻集群部署时未经确认改变的调度与 Prometheus 资源基线，完成两轮独立完整测试，并形成尚待部署的 Grafana Ingress 设计
+- 最近变更时间：`2026-08-05`，纠正常驻集群部署时未经确认改变的调度与 Prometheus 资源基线，完成两轮独立完整测试，并部署 Grafana Ingress
 - 服务器：`104.105.137.213`
 - 当前唯一 Kind 集群：`volcano-benchmark-1348`
 - Kubernetes：`v1.34.8`
 - 当前状态：`1001/1001` Node Ready，其中 `1000` 个 KWOK Node、`1` 个控制面 Node
 - 旧集群 `volcano-benchmark` 已删除，不再具备旧环境回滚能力
 - 本仓库源码已改为复用该常驻集群；普通 `make` 会按 Kueue、Volcano、YuniKorn 顺序直接运行实验，不再创建或删除 Kind 集群
-- `manage-benchmark-experiment` Skill 本轮未修改，仍等待后续单独调整
+- `manage-benchmark-experiment` 和 `volcano-benchmark-server` Skill 已删除；本地 SSH 转发改由 `forward-grafana-local` 提供，日常查看 Dashboard 现优先使用持久 Ingress
 
 本文不保存 kubeconfig 内容、SSH 密码、TLS 私钥、Grafana 密码或 Kubernetes Secret 数据。
 
@@ -32,7 +32,7 @@
 - 部署与验收脚本：`/root/benchmark-1348-deploy/scripts`
 - 运行镜像摘要：`/root/benchmark-1348-deploy/deployed-image-lock.md`
 
-`/root/benchmark-1348-deploy` 是当前集群唯一的可执行权威部署包。重装、修复、指纹核对和版本升级均以该目录中的实际文件为准。
+`/root/benchmark-1348-deploy` 是基础集群和调度/监控组件的可执行权威部署包。Grafana Ingress 的版本化部署源位于服务器仓库 `/root/github/kube-scheduling-perf/deploy/grafana-ingress/`；chart 缓存和运行镜像摘要仍保存在远端部署包中。
 
 ### 过时本地参考副本（只读）
 
@@ -48,7 +48,7 @@
 | 宿主机系统 | Ubuntu `24.04`，`x86_64` |
 | CPU | `32` 逻辑 CPU |
 | 内存 | `62 GiB` |
-| 根磁盘 | `645 GiB`，记录时已用约 `144 GiB` |
+| 根磁盘 | `645 GiB`，记录时已用约 `168 GiB` |
 | Docker Server | `29.1.3` |
 | Helm | `v3.21.1` |
 | Kind | `/usr/local/bin/kind`，`v0.32.0` |
@@ -80,10 +80,11 @@
 |---|---:|---:|
 | Prometheus | `30003` | `31003` |
 | Grafana | `30004` | `31004` |
+| Grafana Ingress | 无，Traefik Service 为 ClusterIP | `31005` |
 
 Prometheus Service 还自动分配了第二个 NodePort `30104` 给 Service 的 `8080` 端口，但 Kind 没有把它映射到宿主机；日常访问只使用 `31003`。
 
-为兼容源码现有结果采集地址，宿主机额外运行 systemd 服务 `benchmark-grafana-port-forward.service`，将 `127.0.0.1:8080` 持久转发到 `monitoring/monitoring-grafana:80`。该端口只监听服务器回环地址，不是 Kind 端口映射。
+为兼容源码现有结果采集地址，宿主机运行 systemd 服务 `benchmark-grafana-port-forward.service`，将 `127.0.0.1:8080` 持久转发到 `monitoring/monitoring-grafana:80`。外部 Dashboard 入口由 `benchmark-grafana-ingress-port-forward.service` 将 `0.0.0.0:31005` 持久转发到 Traefik ClusterIP Service。两个入口都不是 Kind 端口映射。
 
 ### API Server 自定义参数
 
@@ -170,6 +171,7 @@ etcd 数据位于 Kind 控制面容器对应的 Docker volume。执行 `kind del
 | Prometheus Operator | `v0.93.0` | `monitoring` | kube-prometheus-stack 子组件 |
 | Grafana | `13.1.1` | `monitoring` | kube-prometheus-stack 子组件 |
 | Grafana Image Renderer | `v5.11.1` | `monitoring` | kube-prometheus-stack 的远程渲染子组件，版本由 values/Helm 参数固定 |
+| Traefik | chart `40.2.0` / app `v3.7.1` | `benchmark-grafana-ingress` | chart 先下载并校验，再从本地 tgz 安装；镜像固定 digest |
 | kube-state-metrics | `v2.19.1` | `monitoring` | kube-prometheus-stack 子组件 |
 | Audit Exporter | `v0.0.25` | `kube-system` | 本地维护 YAML apply，镜像运行时拉取 |
 | KWOK | `v0.7.0` | `kube-system` | 远程 URL 直接 apply |
@@ -187,6 +189,7 @@ etcd 数据位于 Kind 控制面容器对应的 Docker volume。执行 `kind del
 | Volcano chart | `https://volcano-sh.github.io/helm-charts` | `downloads/volcano-1.15.1.tgz` | `a8135a7430fd48a57d791faac3bbea210106611a826b22ed089ae2dbaad1e7c3` |
 | YuniKorn chart | `https://apache.github.io/yunikorn-release` | `downloads/yunikorn-1.9.0.tgz` | `1d751f5cfb6d545ba21a36ba993669bf08158c1c1abdd89a6c298627d6ed433e` |
 | kube-prometheus-stack chart | `https://prometheus-community.github.io/helm-charts` | `downloads/kube-prometheus-stack-88.1.3.tgz` | `8b51a20164aeb3177b1ce20f1d4cb89f103c02c201aa048afc07f73da50c9d73` |
+| Traefik chart | `https://traefik.github.io/charts` | `downloads/traefik-40.2.0.tgz` | `b73d0159fc1222cc9bdaefde80000a9bad2dfe81de4caed14b9509b3bf6c1df9` |
 
 Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 `versions.env`，部署脚本会验证。Volcano 和 YuniKorn 脚本当前只打印实际 SHA-256，没有把期望值写入 `versions.env`；上表是当前已部署缓存的基线，升级或重建时应先比较，不要无条件覆盖。
 
@@ -197,6 +200,7 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 - Coscheduling：本地 source tarball 解压后，先 server-side apply `manifests/coscheduling/crd.yaml` 和 `config/crd/bases/scheduling.x-k8s.io_elasticquotas.yaml`，再从 `manifests/install/charts/as-a-second-scheduler` 进行 Helm 安装；最后用本地 ConfigMap 覆盖 scheduler 配置，为 Controller 补齐 QPS/Burst/Workers 参数并重启。
 - YuniKorn：`helm upgrade --install` 使用本地 `yunikorn-1.9.0.tgz` 和 `values/yunikorn.yaml`；由于 1.9.0 chart 强制渲染内存字段和 Go 内存环境变量，安装脚本随后以 JSON Patch 精确恢复 CPU-only 资源基线并移除 `GOMEMLIMIT`、`GOGC`，再把 Mutating Webhook 限定到 `bench-yunikorn` 标签、Validating Webhook 限定到 `yunikorn` 命名空间。
 - 监控：`helm upgrade --install` 使用本地且已校验的 kube-prometheus-stack tgz；Prometheus 不设置 CPU/内存 request 或 limit；Image Renderer 由 chart 部署；Audit Exporter、审计 Dashboard 和 `perf` Dashboard 均由部署目录中的本地文件 apply；安装脚本同时安装并启用 Grafana 8080 systemd 转发服务。
+- Grafana Ingress：仓库 `deploy/grafana-ingress/install.sh` 校验并使用远端缓存的 Traefik tgz，以非默认 IngressClass 安装 controller，apply 本地 Ingress，并安装启用 31005 systemd 持久入口。
 
 ## 8. 调度器实际配置
 
@@ -317,30 +321,33 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 - Kubelet、CoreDNS、kube-proxy ServiceMonitor：关闭
 - Default rules：关闭
 
+第二轮完整测试期间 Prometheus 进程 RSS 峰值约为 `19.44GiB`，主容器未重启也未 OOM。当前不设置内存上限与旧源码基线一致，但完整测试前仍需确认宿主机有充足可用内存。
+
 访问地址（从服务器本机）：
 
 - Prometheus：`http://127.0.0.1:31003`
 - Grafana：`http://127.0.0.1:31004`
 - 源码结果采集入口：`http://127.0.0.1:8080/grafana`
+- Grafana Ingress：`http://104.105.137.213:31005/grafana/d/perf/?theme=light`
 
-安全说明：宿主机映射使用 `0.0.0.0:31003/31004`，是否能被公网访问取决于服务器防火墙和云安全组。Grafana 密码保存在 Kubernetes Secret 中，不写入本文。
+安全说明：宿主机入口使用 `0.0.0.0:31003/31004/31005`，是否能被公网访问取决于服务器防火墙和云安全组。Grafana Ingress 已从外部验证可访问，且 Grafana 启用了匿名 Viewer，因此 `31005` 会公开基准指标；不需要公网访问时应在防火墙或云安全组限制来源。Grafana 密码保存在 Kubernetes Secret 中，不写入本文。
 
-Grafana 启用了匿名 Viewer 和 `/grafana/` 子路径。`perf` Dashboard 由 `manifests/perf-dashboard.json` 创建为 `scheduling-perf-dashboard` ConfigMap，固定 UID 为 `perf`；Image Renderer 负责 `/render/d-solo/perf` 图片接口。`verify-monitoring.sh` 会同时验证 31004、8080、Dashboard UID 和 PNG 文件签名。
+Grafana 启用了匿名 Viewer 和 `/grafana/` 子路径。`perf` Dashboard 由 `manifests/perf-dashboard.json` 创建为 `scheduling-perf-dashboard` ConfigMap，固定 UID 为 `perf`；Image Renderer 负责 `/render/d-solo/perf` 图片接口。`verify-monitoring.sh` 会验证 31004、8080、Dashboard UID 和 PNG 文件签名，但这只属于连通性验收，不能证明图片面板含有实验数据。
 
-### Grafana Ingress 设计（尚待部署）
+### Grafana Ingress
 
-仓库中的 `deploy/grafana-ingress/` 已形成以下持久访问设计，但本节记录时尚未应用到集群，不能把这些对象或 `31005` 端口视为当前已提供的服务：
+仓库中的 `deploy/grafana-ingress/` 是当前持久入口的部署和验收源：
 
 - Controller：Traefik Helm chart `40.2.0`，应用版本 `v3.7.1`
 - Helm release 和命名空间：`benchmark-grafana-ingress`
 - 非默认 IngressClass：`benchmark-grafana`
 - 监听范围：只处理 `monitoring` 命名空间的 Kubernetes Ingress；不启用 Traefik CRD 和 Gateway provider
 - 路由：`/grafana` 转发到 `monitoring/monitoring-grafana:80`
-- 计划宿主机入口：`0.0.0.0:31005`
+- 宿主机入口：`0.0.0.0:31005`
 - 持久暴露方式：systemd 服务将宿主机 `31005` 转发到 Traefik ClusterIP Service 的 `80` 端口
 - Kind 端口映射：不新增 `extraPortMappings`；现有 Kind 集群不重建，因此 `31005` 不是 Docker/Kind 端口映射
 
-官方 chart 制品来源为 `https://traefik.github.io/charts/traefik/traefik-40.2.0.tgz`，固定 SHA-256 为 `b73d0159fc1222cc9bdaefde80000a9bad2dfe81de4caed14b9509b3bf6c1df9`。部署后计划使用浅色入口 `http://104.105.137.213:31005/grafana/d/perf/?theme=light`；部署前仍使用现有 `31004` 或回环 `8080` 入口。
+官方 chart 制品来源为 `https://traefik.github.io/charts/traefik/traefik-40.2.0.tgz`，固定 SHA-256 为 `b73d0159fc1222cc9bdaefde80000a9bad2dfe81de4caed14b9509b3bf6c1df9`。当前浅色入口为 `http://104.105.137.213:31005/grafana/d/perf/?theme=light`；服务器内的 `31004` 和回环 `8080` 入口继续保留。
 
 ### Audit Exporter
 
@@ -393,6 +400,7 @@ Grafana 启用了匿名 Viewer 和 `/grafana/` 子路径。`perf` Dashboard 由 
 | Grafana | `grafana/grafana:13.1.1` | `sha256:7cb8c64c4d57a57e734073f3cc94620adb24a0acb929bd80ba9f14017e3a975b` |
 | Grafana Image Renderer | `grafana/grafana-image-renderer:v5.11.1` | `sha256:37e6ed8d55426f80d8d00a839df2cc02568b5877ffa2964f3ec09fa9a295c0a9` |
 | Grafana Sidecar | `quay.io/kiwigrid/k8s-sidecar:2.10.0` | `sha256:21b9fe7bb29d65caf2445ccbf96ff6eda5e589a92bd8f5188f957fe75b551d72` |
+| Traefik | `docker.io/traefik:v3.7.1` | `sha256:6b9cbca6fac42ab0075f5437d8dc1685cfd188626d8d515839ea94f8b6271c42` |
 | kube-state-metrics | `registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.1` | `sha256:85108987d044b18a098126732f98602df408888c0f7d456241f5abefb9744bc1` |
 | Audit Exporter | `ghcr.io/wzshiming/kube-apiserver-audit-exporter/kube-apiserver-audit-exporter:v0.0.25` | `sha256:26ba85a489ba6c25053b84d27f8048db9cc28eec490cadb62f37593da688857b` |
 
@@ -418,6 +426,12 @@ jq --version
 ./scripts/install-monitoring.sh
 ./scripts/verify-monitoring.sh
 
+cd /root/github/kube-scheduling-perf
+./deploy/grafana-ingress/install.sh
+./deploy/grafana-ingress/verify.sh
+
+cd /root/benchmark-1348-deploy
+
 ./scripts/scale-kwok-nodes.sh 1000
 ./scripts/verify-base.sh 1000
 ./scripts/verify-schedulers.sh
@@ -429,7 +443,7 @@ jq --version
 - `/usr/local/bin/kind` 是 `v0.32.0`
 - `versions.env` 和全部下载制品 SHA-256 与本文一致
 - audit policy 源文件仍存在
-- `31003`、`31004` 和回环地址 `127.0.0.1:8080` 未被其他进程占用
+- `31003`、`31004`、`31005` 和回环地址 `127.0.0.1:8080` 未被其他进程占用
 - 至少有足够的 Docker 磁盘空间
 - 已备份需要保留的审计日志、Prometheus 数据导出和实验结果
 
@@ -442,6 +456,8 @@ cd /root/benchmark-1348-deploy
 ./scripts/verify-base.sh 1000
 ./scripts/verify-schedulers.sh
 ./scripts/verify-monitoring.sh
+cd /root/github/kube-scheduling-perf
+./deploy/grafana-ingress/verify.sh
 ```
 
 最低验收标准：
@@ -454,9 +470,13 @@ cd /root/benchmark-1348-deploy
 - Volcano、Kueue、PodGroup 和 ElasticQuota 关键 CRD Established
 - Prometheus、Grafana 和 Grafana Image Renderer 健康检查成功
 - `perf` Dashboard 可从 `127.0.0.1:8080/grafana` 渲染为 PNG
+- Grafana Ingress `verify.sh` 确认 Helm 版本、Deployment、IngressClass、路由、镜像、systemd unit 和服务器回环 31005 链路
+- 从本地电脑单独执行外部 URL 的 `curl`，确认健康接口和 Dashboard 返回 HTTP 200
 - Audit Exporter 暴露调度指标
 
 `run-scheduler-smoke-tests.sh` 会创建并删除真实测试资源，不属于纯只读检查；只在允许变更集群状态时运行。
+
+PNG 签名和 HTTP 200 都不能排除面板显示 `No data`。完整实验验收必须再检查图片内容，并使用对应实验时间窗查询关键 Prometheus 序列。
 
 ## 14. 更新流程建议
 
@@ -517,7 +537,18 @@ cd /root/benchmark-1348-deploy
 | `scripts/verify-schedulers.sh` | `01d2beb821119b578c71fe1776b3aa8e654b4a8f3f8be1a8a6f45569415a3fb2` |
 | `scripts/verify-monitoring.sh` | `a13c5acea6793d15de610420e4ed14f43c06771c8824029d3b62e63adbbc2e1d` |
 | `systemd/benchmark-grafana-port-forward.service` | `23952b1b52fd95bdaab07f91abf1b695a97a52ef99a95dce5a0a27ba84a94ec1` |
-| `deployed-image-lock.md` | `34a0895152408a68a78533b78dce0a632a6d8e6971e56ac88f9004ffe7583957` |
+| `deployed-image-lock.md` | `11c3337ca068b1eb1ec3b3482e09d7c926960a2cd8372d59be7e6e40333492cc` |
+
+Grafana Ingress 的版本化部署源位于仓库，当前文件指纹如下：
+
+| 文件 | SHA-256 |
+|---|---|
+| `deploy/grafana-ingress/versions.env` | `2161ee1332a66dbb5e4e4b0187723d6ad56ca154c08398a85dd82a4feb554f6f` |
+| `deploy/grafana-ingress/values.yaml` | `6c87c4507b1a3528bfdcf6734b0d5d9f9145de6569f03eed2212d9e66be51b32` |
+| `deploy/grafana-ingress/grafana-ingress.yaml` | `d406ea5aa302429fd59176067df684024af9202ab2700867b0866b96fdcaaefe` |
+| `deploy/grafana-ingress/systemd/benchmark-grafana-ingress-port-forward.service` | `9b96570c6594db170aa5d616ef302c5b6b5d793b4ea03dea4f1f3951d5ab51a0` |
+| `deploy/grafana-ingress/install.sh` | `af24426f9a5dd3edd5bc452502e53ca639cc0bc05441f0a53b2b2b5cde6190d6` |
+| `deploy/grafana-ingress/verify.sh` | `2f888cee794a933e4fa79ed30252a7864a82c4213cab8eeff83669efbbfff206` |
 
 这些指纹用于识别部署包漂移，不等于对文件来源的签名认证。
 
@@ -578,3 +609,14 @@ cd /root/benchmark-1348-deploy
 第二轮复制出的部分审计日志还包含第 10 节记录的稀疏 NUL 空洞，不能仅凭非空和表观大小判定有效。原始运行与失败现场保存在服务器 `/root/benchmark-full-runs/20260805T140031Z-second` 和 `/root/github/kube-scheduling-perf/results/failed-full-20260805T140057Z`。
 
 测试后基础集群、8 个调度组件和监控组件均恢复健康，`1001/1001` Node Ready。最终失败属于常驻资源清理的高基数适配缺陷及结果制品验收缺陷，不是 Prometheus `4Gi` OOM 的复发；本轮停止修复，留待后续单独设计。
+
+## 21. 2026-08-05 Grafana Ingress 部署记录
+
+- 部署时间：`2026-08-05T15:20:14Z`；Helm release `benchmark-grafana-ingress` revision `1`，chart `40.2.0`，应用 `v3.7.1`。
+- 初始记录的 GitHub release tgz URL 返回 `404`，下载阶段即停止，未创建集群资源；随后改用 Traefik 官方 Helm 仓库 URL，并以官方 index 中相同的 SHA-256 校验后部署。
+- Controller Deployment 为 `1/1`，Pod restart `0`；Service 是 ClusterIP `10.96.157.253:80`，IngressClass `benchmark-grafana` 为非默认类，controller 为 `traefik.io/ingress-controller`。
+- Ingress `monitoring/benchmark-grafana` 将 `/grafana` 转发到 `monitoring-grafana:80`。Traefik 只监听 `monitoring` 命名空间的 Kubernetes Ingress，不启用 CRD、Gateway provider、管理 Dashboard 或额外 metrics。
+- `benchmark-grafana-ingress-port-forward.service` 已设为 enabled/active，并在主动重启后自动恢复；宿主机 `0.0.0.0:31005` 由该服务持久监听。
+- 从服务器回环和本地电脑访问健康接口均返回 `database=ok`，浅色 Dashboard URL 均返回 HTTP `200`，不再依赖手工 SSH 转发。
+- 部署前后的 Prometheus Pod UID `85919f37-5777-40cb-b438-b3025c602ae1`、Grafana Pod UID `7a40229a-384e-47dc-a467-64b5f6405108` 保持不变，容器 restart 均为 `0`；Ingress 部署没有重启 Prometheus 或 Grafana。
+- 部署后 `verify-base.sh 1000`、`verify-schedulers.sh`、`verify-monitoring.sh`、Ingress `verify.sh` 和三套实验资源零残留断言全部通过。
