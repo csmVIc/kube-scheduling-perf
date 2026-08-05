@@ -5,7 +5,7 @@
 本文记录远端调度基准集群的实际部署状态、安装来源、版本、关键配置、镜像摘要、重建顺序和已知风险，供故障恢复、版本更新和实验环境审计使用。
 
 - 初始记录时间：`2026-08-03T12:35:49Z`（北京时间 `2026-08-03 20:35:49`）
-- 最近变更时间：`2026-08-04`，将 KWOK Node 从 `5000` 缩减为 `1000`，补齐常驻实验所需的 Grafana 渲染和 Coscheduling CRD，并完成源码常驻集群改造验收
+- 最近变更时间：`2026-08-05`，纠正常驻集群部署时未经确认改变的三套调度方案性能基线，并完成部署与健康验证
 - 服务器：`104.105.137.213`
 - 当前唯一 Kind 集群：`volcano-benchmark-1348`
 - Kubernetes：`v1.34.8`
@@ -180,10 +180,10 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 
 ### 具体安装路径
 
-- Volcano：`helm upgrade --install` 使用本地 `volcano-1.15.1.tgz` 和 `values/volcano.yaml`。
-- Kueue：本地 `kueue-v0.19.0.yaml` 使用 `kubectl apply --server-side`；随后应用本地 `kueue-manager-config.yaml`、重启 Controller，并运行 Webhook 作用域修正脚本。
-- Coscheduling：本地 source tarball 解压后，先 server-side apply `manifests/coscheduling/crd.yaml` 和 `config/crd/bases/scheduling.x-k8s.io_elasticquotas.yaml`，再从 `manifests/install/charts/as-a-second-scheduler` 进行 Helm 安装；最后用本地 ConfigMap 覆盖 scheduler 配置并重启。
-- YuniKorn：`helm upgrade --install` 使用本地 `yunikorn-1.9.0.tgz` 和 `values/yunikorn.yaml`。
+- Volcano：`helm upgrade --install` 使用本地 `volcano-1.15.1.tgz` 和 `values/volcano.yaml`；安装脚本随后为 Admission 补齐 chart 未暴露的 API client QPS/Burst 参数，并核对三个 Deployment 的统一资源基线。
+- Kueue：本地 `kueue-v0.19.0.yaml` 使用 `kubectl apply --server-side`；随后应用本地 `kueue-manager-config.yaml`，以 JSON Patch 覆盖官方 manifest 的资源配置，重启 Controller，并运行 Webhook 作用域修正脚本。
+- Coscheduling：本地 source tarball 解压后，先 server-side apply `manifests/coscheduling/crd.yaml` 和 `config/crd/bases/scheduling.x-k8s.io_elasticquotas.yaml`，再从 `manifests/install/charts/as-a-second-scheduler` 进行 Helm 安装；最后用本地 ConfigMap 覆盖 scheduler 配置，为 Controller 补齐 QPS/Burst/Workers 参数并重启。
+- YuniKorn：`helm upgrade --install` 使用本地 `yunikorn-1.9.0.tgz` 和 `values/yunikorn.yaml`；由于 1.9.0 chart 强制渲染内存字段和 Go 内存环境变量，安装脚本随后以 JSON Patch 精确恢复 CPU-only 资源基线，并移除 `GOMEMLIMIT`、`GOGC`。
 - 监控：`helm upgrade --install` 使用本地且已校验的 kube-prometheus-stack tgz；Image Renderer 由 chart 部署；Audit Exporter、审计 Dashboard 和 `perf` Dashboard 均由部署目录中的本地文件 apply；安装脚本同时安装并启用 Grafana 8080 systemd 转发服务。
 
 ## 8. 调度器实际配置
@@ -200,14 +200,16 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 - 第一层插件：`priority`、`gang`，其中 gang `enablePreemptable=false`
 - 第二层插件：`predicates`、`capacity`，其中 capacity `enableHierarchy=false`
 - Volcano Job CRD：`jobs.batch.volcano.sh/v1alpha1`，served/storage 均为 true
+- Scheduler、Controller、Admission API client QPS/Burst 均为 `1000/1000`
+- Controller 的 Job、GC、PodGroup worker 均为 `100`
 
 资源配置：
 
 | Deployment | Requests | Limits |
 |---|---|---|
-| volcano-scheduler | `500m / 512Mi` | `8 CPU / 4Gi` |
-| volcano-controllers | `500m / 512Mi` | `4 CPU / 4Gi` |
-| volcano-admission | `100m / 128Mi` | `1 CPU / 1Gi` |
+| volcano-scheduler | `500m CPU` | `8 CPU` |
+| volcano-controllers | `500m CPU` | `8 CPU` |
+| volcano-admission | `500m CPU` | `8 CPU` |
 
 ### Kueue
 
@@ -217,10 +219,11 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 - `manageJobsWithoutQueueName=false`
 - 只集成 `batch/job`
 - 只管理带 `benchmark.scheduling/base=kueue` 标签的命名空间
-- API client：`qps=300`、`burst=500`
-- 主要并发：Job 5、Workload 10、LocalQueue 5、Cohort 1、ClusterQueue 5、ResourceFlavor 1
+- `leaderElect=false`
+- API client：`qps=1000`、`burst=1000`
+- 当前启用且名称兼容的 Controller 并发：Job、Workload、LocalQueue、Cohort、ClusterQueue、ResourceFlavor 均为 `100`
 - Workload CRD 同时 served `v1beta1` 与 `v1beta2`，storage 版本为 `v1beta2`
-- 资源：Requests `500m / 512Mi`，Limits `2 CPU / 512Mi`
+- 资源：Requests `500m CPU`，Limits `8 CPU`，不设置内存 request/limit
 
 官方 manifest 默认包含较多可选 workload Webhook。部署后额外执行 `scope-kueue-webhooks.sh`，为全部 `21` 个 Mutating Webhook 和全部 `22` 个 Validating Webhook 增加 `benchmark.scheduling/base In [kueue]` 的 namespaceSelector，避免影响 Volcano 和 YuniKorn 测试命名空间。
 
@@ -237,14 +240,15 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 - `clientConnection.qps=1000`、`burst=1000`
 - `leaderElect=false`
 - 启用 `Coscheduling` MultiPoint 和 QueueSort；QueueSort 中禁用其他插件
-- `permitWaitingTimeSeconds=10`
+- `permitWaitingTimeSeconds=60`
+- Scheduler Plugins Controller 参数：`qps=1000`、`burst=1000`、`workers=100`
 
 资源配置：
 
 | Deployment | Requests | Limits |
 |---|---|---|
-| coscheduling | `500m / 512Mi` | `8 CPU / 4Gi` |
-| scheduler-plugins-controller | `100m / 128Mi` | `1 CPU / 1Gi` |
+| coscheduling | `500m CPU` | `8 CPU` |
+| scheduler-plugins-controller | `500m CPU` | `8 CPU` |
 
 ### YuniKorn
 
@@ -258,13 +262,14 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 - Admission 只处理 `^bench-yunikorn$`
 - Admission 绕过 `^(kube-system|yunikorn)$`
 - 没有挂载自定义队列 ConfigMap；当前使用 YuniKorn 内置默认队列结构，测试队列为 `root.default`
+- Scheduler 和 Admission 均未设置 `GOMEMLIMIT`、`GOGC`，使用与旧基线一致的 Go runtime 默认行为
 
 资源配置：
 
 | Deployment | Requests | Limits |
 |---|---|---|
-| yunikorn-scheduler | `500m / 1Gi` | `8 CPU / 4Gi` |
-| yunikorn-admission-controller | `100m / 256Mi` | `1 CPU / 1Gi` |
+| yunikorn-scheduler | `500m CPU` | `8 CPU` |
+| yunikorn-admission-controller | `500m CPU` | `8 CPU` |
 
 ## 9. 命名空间与多调度器隔离
 
@@ -449,12 +454,12 @@ cd /root/benchmark-1348-deploy
 |---|---|
 | `versions.env` | `9802258aa7437b303934ab306442f5f48d4ba7466802ff93ed0371a8932c7305` |
 | `kind-config.yaml` | `bd10f1e3c27816f08be50741ce6ad58924bfde478249ac249ee4d3f52597e8a8` |
-| `values/volcano.yaml` | `12dfb67605f6331981a4d18aebca307bf290bdec0a0b45252a20c92d3d062fc3` |
-| `values/coscheduling.yaml` | `61a620d3ffd4ba04c2877b3147aa421c1337b3a99b00e62d7fdf3d943f899148` |
-| `values/yunikorn.yaml` | `80b28b179c7cc27ab9b0f723898b0978d9cc9b09e16d511082a3d18ea47ccad7` |
+| `values/volcano.yaml` | `e2bbd980356f744873887498bcc50da99d5a7ee6d2abbbfade6c135078271316` |
+| `values/coscheduling.yaml` | `3bc034780c3681265dd399556abf80ff8b09817c301c3a116b183e2fb3443920` |
+| `values/yunikorn.yaml` | `a2955429e78d203c17a9b4c21de03ab1aa04a055a57989d16fcba9d7eacb1856` |
 | `values/monitoring.yaml` | `10ade921cffcb719201bbaa01d3f924d17eff4f01904a4a70d0ba19d1e51f566` |
-| `manifests/kueue-manager-config.yaml` | `c83ae412d2717ffee1deb9f7deb540cfd4f14dcbf2317810828da809bc672157` |
-| `manifests/coscheduling-configmap.yaml` | `5962e58f741802567db2cd4022a1ac19949e18a62b956c1ff3545ea11181ce44` |
+| `manifests/kueue-manager-config.yaml` | `d57eb6b23529e5551cdacb9185bc65d6516da15bdf04d2850dce9b3026c7cc26` |
+| `manifests/coscheduling-configmap.yaml` | `734c327e14ca405679e5bb57e875386aa11981e17dfbe7e22a3749b2efc4ebbe` |
 | `manifests/benchmark-namespaces.yaml` | `e766ab1fc5c3de100f727a5ac46fcaee8ae3e9d0eb9eb682c4769b715fbba74f` |
 | `manifests/audit-exporter.yaml` | `e784ca7241ffb9b1b3055505643d3a34b92b55e47395bd6670562e393d1039a8` |
 | `manifests/audit-dashboard.yaml` | `558dfb641b07815b1dba8467a7939516be88ce3b07016f448d08e775c81d82fb` |
@@ -463,7 +468,7 @@ cd /root/benchmark-1348-deploy
 | `scripts/create-canary-cluster.sh` | `c8d81b51990e97bcef387cc6a8f47f8cd253d17c2684cb910b1e9ca3899c03ec` |
 | `scripts/install-kwok-canary.sh` | `24ec70a2d257b5615ee67c5fd6e0e743542aed552d209683eed33f8ff19cbcb5` |
 | `scripts/prepare-scheduler-artifacts.sh` | `ef0fc3f6d828d9e98c0cc8dcbe4ff1dfbb6a603ba62ec93a3c2feee7c1f574c1` |
-| `scripts/install-schedulers.sh` | `3fa302d6af5aeebab964a8f6b43f01ee2d7e88d1c85fdf2059e31c98e73f077b` |
+| `scripts/install-schedulers.sh` | `d9e085d5782ab19fd75e7d49648764ccb53e49eb6e6b648af354e7517e267f80` |
 | `scripts/scope-kueue-webhooks.sh` | `f3be442a47f5992e78b37b0b4c2f4dac672cc79fc683f44cb206c9e44a96acdc` |
 | `scripts/prepare-monitoring-artifacts.sh` | `04bdaafab302f228bc7c1d843531db0059dbadca3b7effda3a9e576704caf020` |
 | `scripts/install-monitoring.sh` | `c05b6909f00556bd2f26810f899fe69236a9edeec9b20e19ba78ed11ff495994` |
@@ -486,3 +491,13 @@ cd /root/benchmark-1348-deploy
 - 常驻集群源码在服务器隔离目录 `/root/benchmark-resident-source` 完成 Kueue、Volcano、YuniKorn 单项冒烟和完整串行实验；原目录 `/root/github/kube-scheduling-perf` 的跟踪文件未改动。
 - 完整串行验收结果位于 `/root/benchmark-resident-source/results/1785850713`，包含 8 张有效 PNG 和三份非空 API Server 审计日志。
 - 在 Volcano 完成 `prepare`、尚未执行 `start/end` 时直接执行 `make down`，确认实验资源和状态文件零残留、Volcano 配置恢复、全部调度 Deployment 为 `1/1`、`1001/1001` Node Ready。
+
+## 18. 2026-08-05 性能基线纠正记录
+
+- 比较常驻集群改造前提交 `6ce46e0cd2464a5c03331f8ee756980719ca4d69`、当前部署包和实时 Deployment，确认 8 个调度组件的资源配置在常驻部署时发生了未经批准的变化。
+- 将 Kueue、Coscheduling、Volcano、YuniKorn 的 8 个调度组件统一恢复为 CPU request `500m`、limit `8`，不设置内存 request/limit。
+- Kueue 恢复 API client `1000/1000`、兼容且启用的六类 Controller 并发 `100` 和关闭 Leader Election；未机械添加未启用的 Pod Controller。
+- Coscheduling 保留当前版本默认 parallelism `16`，恢复 Controller `qps/burst/workers=1000/1000/100` 和旧基线等价的 Permit 等待 `60s`。
+- Volcano 恢复 Scheduler、Controller、Admission API client `1000/1000` 和 Controller 三类 worker `100`；保留已批准的新版 Admission 集合、命名空间隔离以及 `benchmark-root` 所需的 Scheduler actions/plugins。
+- YuniKorn 没有旧基线对应的 QPS/并发项；恢复统一 CPU-only 资源，并移除 chart 因内存限制生成的 `GOMEMLIMIT`、`GOGC`。
+- 本地部署包与远端部署包的 6 个变更文件逐项 SHA-256 一致；执行 `install-schedulers.sh` 后，基础集群、调度器和监控验证全部通过，Node 为 `1001/1001 Ready`。
