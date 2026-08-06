@@ -217,8 +217,10 @@ Exporter 停止后才截断日志，避免旧 offset、进程内 Counter/Histogr
 
 #### `down-kueue`
 
-- 删除 `bench-kueue` 中的 Job、Pod、Workload、LocalQueue 和 PodGroup
+- 使用 `kubectl delete --wait=false` 异步提交 `bench-kueue` 中 Job、Pod、Workload、LocalQueue 和 PodGroup 的删除请求
+- 默认等待最多 `600` 秒，确认上述命名空间资源全部归零
 - 删除测试创建的 ClusterQueue、ResourceFlavor、WorkloadPriorityClass
+- 对命名空间和集群级测试资源执行最终零残留断言
 - 将全部调度相关 Deployment 恢复到测试前记录的实际副本数
 - 按原副本数等待运行组件 Ready 或停用组件归零
 
@@ -407,25 +409,21 @@ spec:
 
 不把结果归档路径改成 `/root/benchmark-1348-deploy/logs`。
 
+已观察到截断正在写入的主审计文件可能产生稀疏 NUL 空洞；当前结果分析不使用原始审计文件，本轮暂不修改该链路。
+
 ### 8.3 调整图片筛选条件
 
-`save-result-images.sh` 保留 `127.0.0.1:8080/grafana`，但 namespace 过滤不能继续固定为 `default`。
+`save-result-images.sh` 保留 `127.0.0.1:8080/grafana`。Dashboard 全部 8 个面板的查询将实验命名空间标签统一为 `exported_namespace=~"$namespace"`；渲染 URL 的 resource、user、verb 和 namespace 变量使用 Grafana 原生 `$__all`，cluster 仍显式选择 `kueue`、`volcano` 和 `yunikorn`。
 
-改为显式覆盖：
-
-- `bench-kueue`
-- `bench-volcano`
-- `bench-yunikorn`
-
-同时显式选择 `cluster=kueue|volcano|yunikorn`，使三轮由全新 Exporter 进程产生的指标保持独立。图片使用完整串行实验的绝对 `FROM/TO` 时间窗，不再使用“等待后查询最近 N 秒”。
+图片使用完整串行实验的绝对 `FROM/TO` 时间窗，不再使用“等待后查询最近 N 秒”。Grafana 13 已验证能用现有 `panel-1` 至 `panel-8` 映射全部 8 个面板，不修改 Panel ID。
 
 ## 9. 主要修改文件
 
 | 文件 | 修改内容 |
 |---|---|
 | `.gitignore` | 忽略异常恢复所需的常驻状态目录 |
-| `Makefile` | 常驻集群生命周期、串行流程、down 恢复、移除 overview 调用、save-result 不再 down |
-| `hack/save-result-images.sh` | namespace 筛选适配三个测试命名空间 |
+| `Makefile` | 常驻集群生命周期、Kueue 异步清理与 600 秒归零等待、down 恢复、移除 overview 调用、save-result 不再 down |
+| `hack/save-result-images.sh` | 使用 `exported_namespace` Dashboard 和 Grafana 原生 All 变量渲染结果 |
 | `test/utils/option.go` | 删除 Node 创建参数 |
 | `test/utils/utils.go` | WaitDeployment 限定 namespace，RestartDeployment 使用真实 rollout |
 | `test/*/batch_job_test.go` | 删除 AddNodes 调用 |
@@ -467,6 +465,8 @@ spec:
 - 测试前 YuniKorn Scheduler 为 0 副本时，结束后仍为 0，配置恢复过程不触发额外重启
 - 无测试 Job、Queue、Workload、PodGroup 或 PriorityClass 残留
 - 最终保持 `1001/1001` Node Ready
+- 场景 5 中 Kueue 的 10000 个 PodGroup 能异步删除并在 600 秒内确认归零，随后 Volcano 和 YuniKorn 正常执行
+- 8 张 Grafana 图片均包含实际曲线，不显示 `No data`
 
 ### 10.4 人工恢复验收
 
@@ -477,3 +477,9 @@ make down
 ```
 
 确认配置、副本数、测试资源和集群健康状态全部恢复。
+
+## 11. 当前验证状态
+
+提交 `708f8fafb2ba9b86641d2f3a8201b168561905b0` 已通过场景 5 定向验证：Kueue、Volcano、YuniKorn 三组 `TestBatchJob` 全部通过，Kueue 高基数异步清理、600 秒归零等待、调度器切换、8 张 Grafana 实际曲线和最终集群恢复均通过。结果位于服务器 `/root/github/kube-scheduling-perf/results/1786021307`。
+
+该结果只验收场景 5 的原失败链路；尚未在此提交上重新执行全部 8 个场景，因此不能据此将完整测试结论改为通过。审计日志稀疏 NUL 空洞按当前范围保留为已知限制。

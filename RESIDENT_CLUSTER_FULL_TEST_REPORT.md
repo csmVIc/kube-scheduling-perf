@@ -2,13 +2,14 @@
 
 ## 1. 结论
 
-常驻集群源码改造、基线纠正、最小测试、两轮独立完整测试和最终恢复均已执行完毕，最终结论是“完整测试未通过”。
+常驻集群源码改造、基线纠正、最小测试和两轮独立完整测试均已执行完毕；随后针对第二轮暴露的 Kueue 高基数清理与 Grafana 空图片问题实施最小修复，并完成场景 5 定向复测。完整测试没有重跑，因此完整测试结论仍是“未通过”，但场景 5 的原失败链路已经验证修复。
 
 - 基线纠正后的场景 1 最小测试首轮通过，Kueue、Volcano、YuniKorn 均完成调度和结果采集。
 - 第一轮独立完整测试在场景 3 因未经批准加入的 Prometheus `4Gi` 内存上限触发 OOM 而失败；随后只实施了计划允许的一轮修复。
 - 第二轮执行完全部 8 个场景，`TestBatchJob` 为 `23/24` 通过；唯一失败是场景 5 Volcano，其上游原因是 Kueue 清理 10000 个 PodGroup 时同步删除超时并保留 resident state。
-- Prometheus 修复在第二轮得到验证，全程没有 OOM 或容器重启；但结果图片全部为 `No data`，场景 4 后的部分审计文件存在稀疏 NUL 空洞。
-- 按执行约束不再修复、不执行第三轮完整测试；因最终验收未通过，`README.md` 保持不变。
+- 在 `5072e2e` 基础上提交 `708f8fa`：Kueue 命名空间资源改为异步删除并等待最多 10 分钟归零，Grafana 渲染变量改用原生 `$__all`。
+- `708f8fa` 的场景 5 定向复测中三套调度器全部通过，Kueue 的 10000 个 PodGroup 清理完成，8 张 Grafana 图片均包含实际曲线。
+- 审计日志稀疏 NUL 空洞本轮按约定暂不修复；没有执行第三轮完整测试，`README.md` 保持不变。
 - 测试结束后集群已恢复固定基线，`1001/1001` Node、8 个调度组件和监控组件均健康。
 
 ## 2. 被测版本和集群基线
@@ -21,9 +22,10 @@
 | 初版评审修复 | `add6e843ff31ae3c232cfb16c807077cc89245f6` | `fix: harden resident cluster benchmark recovery` |
 | 基线纠正后场景 1 最小测试 | `3fedf92c82fce58ca12f1e1551443a55b4e79e97` | 三套调度方案基线纠正和独立评审处理完成 |
 | 第一轮独立完整测试 | `73ae14df7f29e6f4e81e34f91e286e1ff7f278cd` | 场景 3 Prometheus OOM，触发唯一一轮修复 |
-| 第二轮独立完整测试（最终被测） | `c3805c84e68fa233f76041ec720b7ccbbb20cbe8` | `fix: tolerate transient metrics outages` |
+| 第二轮独立完整测试 | `c3805c84e68fa233f76041ec720b7ccbbb20cbe8` | `fix: tolerate transient metrics outages` |
+| 场景 5 定向修复验证 | `708f8fafb2ba9b86641d2f3a8201b168561905b0` | `fix: make Kueue cleanup asynchronous` |
 
-服务器仓库在每轮测试前均同步到表中的对应 Commit；本报告最终性能验收所测试的源码版本为 `c3805c84e68fa233f76041ec720b7ccbbb20cbe8`。
+服务器仓库在每轮测试前均同步到表中的对应 Commit。最后一次完整测试使用 `c3805c84e68fa233f76041ec720b7ccbbb20cbe8`；最新场景 5 定向验证使用 `708f8fafb2ba9b86641d2f3a8201b168561905b0`。
 
 ### 2.2 集群和组件
 
@@ -520,3 +522,39 @@ Wrapper 退出码为 `0` 只表示顶层命令执行到末尾，不代表 24 组
 尽管第二轮 Wrapper 退出码为 `0`、八个场景都执行到结果保存，且 Prometheus OOM 修复验证有效，场景 5 Volcano 的明确失败、64 张 `No data` 图片和场景 4 以后审计文件的 NUL 内容都不符合完整测试验收条件，因此本轮最终判定为失败。
 
 按已确认的执行约束，第二轮完整测试失败后不再修复、不再执行第三轮完整测试。`README.md` 只在完整测试验证通过后才重构，因此本轮不修改 `README.md`。
+
+## 18. 场景 5 清理与 Grafana 定向修复验证（通过）
+
+### 18.1 修复内容
+
+- 从 `5072e2e4286fede42769a21996bd1562ca141c38` 重新形成最小修复提交 `708f8fafb2ba9b86641d2f3a8201b168561905b0`。
+- Kueue 的 Job、PodGroup、Workload、LocalQueue 和 Pod 删除改为 `kubectl delete --wait=false`；删除请求提交后等待命名空间资源归零，默认上限 `600` 秒，再删除 ClusterQueue、ResourceFlavor 和 WorkloadPriorityClass并执行最终零残留断言。
+- Dashboard 的 8 个面板查询使用 `exported_namespace=~"$namespace"`；渲染 URL 的 resource、user、verb 和 namespace 变量改用 Grafana 原生 `$__all`，cluster 仍显式选择 Kueue、Volcano 和 YuniKorn。
+- 历史时间窗验证确认 Grafana 13 能正确解析现有 `panel-1` 至 `panel-8`，因此没有修改 Panel ID。
+- 按确认范围，不处理原始审计日志的稀疏 NUL 空洞。
+
+### 18.2 执行结果
+
+| 项目 | 内容 |
+| --- | --- |
+| 命令 | `make serial-test TEST_TIMEOUT_SECONDS=430 NODES_SIZE=1000 GANG=true QUEUES_SIZE=1 JOBS_SIZE_PER_QUEUE=10000 PODS_SIZE_PER_JOB=1` |
+| 独立会话 | `tmux resident-scenario5-20260806T125259Z` |
+| 开始时间 | `2026-08-06T12:52:59Z` |
+| 结束时间 | `2026-08-06T13:02:45Z` |
+| 总耗时 | `9m46s` |
+| 退出码 | `0` |
+| 结果时间窗 | `1786020779464` 至 `1786021289129` 毫秒 |
+| 结果目录 | 服务器 `/root/github/kube-scheduling-perf/results/1786021307` |
+| 运行日志 | 服务器 `/root/benchmark-validation-runs/scenario5-20260806T125259Z/run.log` |
+
+| 调度方案 | `TestBatchJob` | Prometheus 抓取屏障 |
+| --- | ---: | --- |
+| Kueue | 通过，`158.79s` | 通过，`total=140207` |
+| Volcano | 通过，`118.21s` | 通过，`total=130064` |
+| YuniKorn | 通过，`118.04s` | 通过，`total=164589` |
+
+Kueue 的 10000 个 PodGroup 异步删除请求成功提交，命名空间资源在 10 分钟上限内归零，随后集群级测试资源删除和最终断言均通过。Kueue resident state 正常清除，Volcano 不再被 `Resident state exists` 拒绝，Volcano Admission 也没有再次出现 connection refused。
+
+结果目录包含 3 份审计日志和 8 张 Grafana PNG。8 张图片大小为 `644576` 至 `1201975` 字节，逐张检查均包含 Kueue、Volcano、YuniKorn 的实际曲线；Created、Scheduled、API Calls、调度延迟和 Job 完成指标均不再显示 `No data`。
+
+测试后 `.resident-state` 不存在，三套调度器实验资源零残留；`verify-base.sh 1000`、`verify-schedulers.sh`、`verify-monitoring.sh` 和 Grafana Ingress 验收全部通过，集群保持 `1001/1001 Ready`。本次只证明场景 5 原失败链路和图片问题已修复，不等同于重新完成 8 个场景的完整测试。

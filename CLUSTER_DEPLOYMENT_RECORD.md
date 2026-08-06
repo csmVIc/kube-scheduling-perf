@@ -5,7 +5,7 @@
 本文记录远端调度基准集群的实际部署状态、安装来源、版本、关键配置、镜像摘要、重建顺序和已知风险，供故障恢复、版本更新和实验环境审计使用。
 
 - 初始记录时间：`2026-08-03T12:35:49Z`（北京时间 `2026-08-03 20:35:49`）
-- 最近变更时间：`2026-08-05`，纠正常驻集群部署时未经确认改变的调度与 Prometheus 资源基线，完成两轮独立完整测试，并部署 Grafana Ingress
+- 最近变更时间：`2026-08-06`，完成场景 5 高基数 Kueue 异步清理与 Grafana 结果链路定向验证
 - 服务器：`104.105.137.213`
 - 当前唯一 Kind 集群：`volcano-benchmark-1348`
 - Kubernetes：`v1.34.8`
@@ -298,7 +298,7 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 | `bench-kueue` | `benchmark.scheduling/base=kueue` | Kueue + Coscheduling |
 | `bench-yunikorn` | `benchmark.scheduling/base=yunikorn` | YuniKorn |
 
-空闲基线下三套 Scheduler Deployment 都是 `1` 副本并同时运行。仓库常驻集群流程会在每轮实验前记录所有调度组件的实际副本数，仅保留目标调度组件为 `1` 副本、将其他调度组件缩容为 `0`，等待非目标 Pod 完全退出后再开始测试；本轮结束后阻塞清理测试资源，使用精确替换恢复可变 ConfigMap，并恢复测试前实际副本数。YuniKorn 清理不主动扩容 Scheduler 或 Admission；测试前 Scheduler 为 `0` 时，配置恢复也不会额外启动或重启它。
+空闲基线下三套 Scheduler Deployment 都是 `1` 副本并同时运行。仓库常驻集群流程会在每轮实验前记录所有调度组件的实际副本数，仅保留目标调度组件为 `1` 副本、将其他调度组件缩容为 `0`，等待非目标 Pod 完全退出后再开始测试；Kueue 命名空间资源使用异步删除并在最多 600 秒内确认归零，再删除集群级测试资源；随后使用精确替换恢复可变 ConfigMap，并恢复测试前实际副本数。YuniKorn 清理不主动扩容 Scheduler 或 Admission；测试前 Scheduler 为 `0` 时，配置恢复也不会额外启动或重启它。
 
 ## 10. 监控与审计
 
@@ -332,7 +332,7 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 
 安全说明：宿主机入口使用 `0.0.0.0:31003/31004/31005`，是否能被公网访问取决于服务器防火墙和云安全组。Grafana Ingress 已从外部验证可访问，且 Grafana 启用了匿名 Viewer，因此 `31005` 会公开基准指标；不需要公网访问时应在防火墙或云安全组限制来源。Grafana 密码保存在 Kubernetes Secret 中，不写入本文。
 
-Grafana 启用了匿名 Viewer 和 `/grafana/` 子路径。`perf` Dashboard 由 `manifests/perf-dashboard.json` 创建为 `scheduling-perf-dashboard` ConfigMap，固定 UID 为 `perf`；Image Renderer 负责 `/render/d-solo/perf` 图片接口。`verify-monitoring.sh` 会验证 31004、8080、Dashboard UID 和 PNG 文件签名，但这只属于连通性验收，不能证明图片面板含有实验数据。
+Grafana 启用了匿名 Viewer 和 `/grafana/` 子路径。`perf` Dashboard 由 `manifests/perf-dashboard.json` 创建为 `scheduling-perf-dashboard` ConfigMap，固定 UID 为 `perf`；当前 20 条可见查询均使用 `exported_namespace`。Image Renderer 负责 `/render/d-solo/perf` 图片接口；场景 5 已验证 `panel-1` 至 `panel-8` 均能渲染实际曲线。`verify-monitoring.sh` 的基础 PNG 检查仍只属于连通性验收，完整实验还需检查图片内容。
 
 ### Grafana Ingress
 
@@ -520,7 +520,7 @@ PNG 签名和 HTTP 200 都不能排除面板显示 `No data`。完整实验验�
 | `manifests/benchmark-namespaces.yaml` | `e766ab1fc5c3de100f727a5ac46fcaee8ae3e9d0eb9eb682c4769b715fbba74f` |
 | `manifests/audit-exporter.yaml` | `e784ca7241ffb9b1b3055505643d3a34b92b55e47395bd6670562e393d1039a8` |
 | `manifests/audit-dashboard.yaml` | `558dfb641b07815b1dba8467a7939516be88ce3b07016f448d08e775c81d82fb` |
-| `manifests/perf-dashboard.json` | `a3ea7661ba0023b84f07a46d1fd9afefac5899c725387c37e4649e6e5d5acec2` |
+| `manifests/perf-dashboard.json` | `4f86fba9eb59e5496b80c3c09fb1491e88554662b8b5acecf4f54e22b025f4f3` |
 | `manifests/scheduler-smoke-tests.yaml` | `8574169b65bd048ed085c344bdbf6650cae18773c44001a7bef1bfc0acd8aa45` |
 | `scripts/create-canary-cluster.sh` | `796c7aee3595252d492d937a6ebb76c7f6fd609806a419aae746c7b42c14ce03` |
 | `scripts/configure-control-plane-baseline.sh` | `8e533ca29ef7b45751fa5c178f04cf088ae55f74d878b17907e6d1c2831d7a47` |
@@ -620,3 +620,13 @@ Grafana Ingress 的版本化部署源位于仓库，当前文件指纹如下：
 - 从服务器回环和本地电脑访问健康接口均返回 `database=ok`，浅色 Dashboard URL 均返回 HTTP `200`，不再依赖手工 SSH 转发。
 - 部署前后的 Prometheus Pod UID `85919f37-5777-40cb-b438-b3025c602ae1`、Grafana Pod UID `7a40229a-384e-47dc-a467-64b5f6405108` 保持不变，容器 restart 均为 `0`；Ingress 部署没有重启 Prometheus 或 Grafana。
 - 部署后 `verify-base.sh 1000`、`verify-schedulers.sh`、`verify-monitoring.sh`、Ingress `verify.sh` 和三套实验资源零残留断言全部通过。
+
+## 22. 2026-08-06 场景 5 定向修复验证
+
+- 服务器仓库与远程 `master` 同步到 `708f8fafb2ba9b86641d2f3a8201b168561905b0`。
+- Kueue 的 Job、PodGroup、Workload、LocalQueue 和 Pod 改为异步删除，等待最多 600 秒确认命名空间资源归零后，再删除 ClusterQueue、ResourceFlavor 和 WorkloadPriorityClass。
+- 场景 5（Gang，`10000 job × 1 pod`）于 `2026-08-06T12:52:59Z` 至 `13:02:45Z` 执行，退出码为 `0`；Kueue、Volcano、YuniKorn 分别用时 `158.79s`、`118.21s`、`118.04s`。
+- Kueue 的 10000 个 PodGroup 清理成功，Volcano 与 YuniKorn 随后正常执行；结果目录为 `/root/github/kube-scheduling-perf/results/1786021307`。
+- Grafana 渲染使用原生 `$__all` 变量；8 张 PNG 均包含实际曲线，不再是 `No data`。实时 Dashboard 的 20 条可见查询全部使用 `exported_namespace`，远端权威部署文件指纹已更新到第 16 节。
+- 本轮不处理历史审计日志稀疏 NUL 空洞，也没有重跑全部 8 个场景；因此只将场景 5 原失败链路判定为修复，不改变上一轮完整测试的历史结论。
+- 测试后 `.resident-state` 和三套实验资源均无残留；`1001/1001` Node、8 个调度组件、Audit Exporter、Prometheus、Grafana 和 Ingress 验收通过。
