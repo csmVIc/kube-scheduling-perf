@@ -2,6 +2,8 @@ export PATH := $(CURDIR)/bin:$(PATH)
 
 TEST_TIMEOUT_SECONDS ?= 3600
 
+CLEANUP_TIMEOUT_SECONDS ?= 600
+
 RESULT_METRICS_TIMEOUT_SECONDS ?= 120
 
 NODES_SIZE ?= 1000
@@ -353,11 +355,12 @@ restore-audit-exporter:
 
 .PHONY: cleanup-kueue-resources
 cleanup-kueue-resources:
-	$(KUBECTL_CMD) delete jobs.batch --all -n bench-kueue --ignore-not-found --timeout=5m
-	$(KUBECTL_CMD) delete podgroups.scheduling.x-k8s.io --all -n bench-kueue --ignore-not-found --timeout=5m
-	$(KUBECTL_CMD) delete workloads.kueue.x-k8s.io --all -n bench-kueue --ignore-not-found --timeout=5m
-	$(KUBECTL_CMD) delete localqueues.kueue.x-k8s.io --all -n bench-kueue --ignore-not-found --timeout=5m
-	$(KUBECTL_CMD) delete pods --all -n bench-kueue --ignore-not-found --force --grace-period=0 --timeout=5m
+	$(KUBECTL_CMD) delete jobs.batch --all -n bench-kueue --ignore-not-found --wait=false
+	$(KUBECTL_CMD) delete podgroups.scheduling.x-k8s.io --all -n bench-kueue --ignore-not-found --wait=false
+	$(KUBECTL_CMD) delete workloads.kueue.x-k8s.io --all -n bench-kueue --ignore-not-found --wait=false
+	$(KUBECTL_CMD) delete localqueues.kueue.x-k8s.io --all -n bench-kueue --ignore-not-found --wait=false
+	$(KUBECTL_CMD) delete pods --all -n bench-kueue --ignore-not-found --force --grace-period=0 --wait=false
+	$(MAKE) wait-no-kueue-namespaced-resources
 	@set -eu; \
 		resources="$$( $(KUBECTL_CMD) get clusterqueues.kueue.x-k8s.io -o name )"; \
 		for resource in $$resources; do \
@@ -367,6 +370,16 @@ cleanup-kueue-resources:
 	$(KUBECTL_CMD) delete workloadpriorityclasses.kueue.x-k8s.io \
 		human-critical business-impacting long-term-research --ignore-not-found --timeout=5m
 	$(MAKE) assert-no-kueue-resources
+
+.PHONY: wait-no-kueue-namespaced-resources
+wait-no-kueue-namespaced-resources:
+	@set -eu; \
+		for attempt in $$(seq 1 $(CLEANUP_TIMEOUT_SECONDS)); do \
+			residual="$$( $(KUBECTL_CMD) get jobs.batch,pods,workloads.kueue.x-k8s.io,localqueues.kueue.x-k8s.io,podgroups.scheduling.x-k8s.io -n bench-kueue -o name )"; \
+			test -z "$$residual" && exit 0; \
+			sleep 1; \
+		done; \
+		printf 'Residual namespaced Kueue resources after %s seconds:\n%s\n' '$(CLEANUP_TIMEOUT_SECONDS)' "$$residual" >&2; exit 1
 
 .PHONY: cleanup-volcano-resources
 cleanup-volcano-resources:
@@ -391,7 +404,7 @@ cleanup-yunikorn-resources:
 .PHONY: assert-no-kueue-resources
 assert-no-kueue-resources:
 	@set -eu; \
-		for attempt in $$(seq 1 300); do \
+		for attempt in $$(seq 1 $(CLEANUP_TIMEOUT_SECONDS)); do \
 			namespaced="$$( $(KUBECTL_CMD) get jobs.batch,pods,workloads.kueue.x-k8s.io,localqueues.kueue.x-k8s.io,podgroups.scheduling.x-k8s.io -n bench-kueue -o name )"; \
 			all_queues="$$( $(KUBECTL_CMD) get clusterqueues.kueue.x-k8s.io -o name )"; \
 			queues="$$(printf '%s\n' "$$all_queues" | sed -n '/\/default-cluster-queue-/p')"; \

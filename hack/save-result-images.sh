@@ -28,13 +28,8 @@ for i in {1..8}; do
     --data-urlencode 'var-datasource=prometheus' \
     --data-urlencode 'var-resource=$__all' \
     --data-urlencode 'var-user=$__all' \
-    --data-urlencode 'var-verb=create' \
-    --data-urlencode 'var-verb=delete' \
-    --data-urlencode 'var-verb=patch' \
-    --data-urlencode 'var-verb=update' \
-    --data-urlencode 'var-namespace=bench-kueue' \
-    --data-urlencode 'var-namespace=bench-volcano' \
-    --data-urlencode 'var-namespace=bench-yunikorn' \
+    --data-urlencode 'var-verb=$__all' \
+    --data-urlencode 'var-namespace=$__all' \
     --data-urlencode 'var-cluster=kueue' \
     --data-urlencode 'var-cluster=volcano' \
     --data-urlencode 'var-cluster=yunikorn' \
