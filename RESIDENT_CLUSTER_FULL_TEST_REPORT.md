@@ -570,8 +570,7 @@ Kueue 的 10000 个 PodGroup 异步删除请求成功提交，命名空间资源
 | 被测 Commit | `b2fd509cabfd837e34fe9439d5855c32c531c710` |
 | 命令 | `make` |
 | 独立会话 | `tmux resident-full-t0-20260806T133924Z` |
-| UTC 时间 | `2026-08-06T13:39:34Z` 至 `2026-08-06T14:34:33Z` |
-| 北京时间 | `2026-08-06 21:39:34` 至 `2026-08-06 22:34:33` |
+| CST（UTC+8）时间 | `2026-08-06 21:39:34` 至 `2026-08-06 22:34:33` |
 | 总耗时 | `3299s`（`54m59s`） |
 | Wrapper 退出码 | `0` |
 | 子测试结果 | `24/24` 组 `TestBatchJob` 全部通过 |
@@ -582,53 +581,104 @@ Kueue 的 10000 个 PodGroup 异步删除请求成功提交，命名空间资源
 
 测试在服务器独立 `tmux` 会话中运行。本地 SSH 控制连接在场景 7 与场景 8 之间失效过一次，重新连接后确认服务器测试持续运行，未中止、未重启，也没有改变实验时间边界。本轮 T0 直接通过，因此没有进入任何修复轮次，也没有在完整测试期间修改源码。
 
-### 19.2 八个场景的时间边界与结果目录
+### 19.2 各调度方案的实际配置
 
-| 场景 | 模式与参数 | UTC 时间边界 | 耗时 | 指标时间窗（毫秒） | 结果目录 |
+本轮三个对比方案并非都由同一种组件直接完成 Pod 调度。CPU、内存、Kubernetes 客户端限速和并发等公共性能参数统一列在下表；同一单元格中的 request/limit 均按该顺序记录。
+
+| 对比方案 | 组件与作用 | CPU request/limit | 内存 request/limit | Kubernetes client QPS/Burst | 并发或 Worker |
+| --- | --- | --- | --- | --- | --- |
+| Kueue 非 Gang | 默认 `kube-scheduler`，实际调度 Pod | `1 / 8` | 未设置 | `1000/1000` | 未额外修改 |
+| Kueue 准入 | `kueue-controller-manager`，负责准入和队列控制 | `500m / 8` | 未设置 | `1000/1000` | Job、Workload、LocalQueue、Cohort、ClusterQueue、ResourceFlavor 均为 `100` |
+| Kueue Gang | `coscheduling`，实际调度 Pod | `500m / 8` | 未设置 | `1000/1000` | Scheduler `parallelism=16` |
+| Kueue Gang 辅助 | `scheduler-plugins-controller`，管理 PodGroup/ElasticQuota | `500m / 8` | 未设置 | 参数为 `1000/1000`；因上游缺陷，有效值仍为 controller-runtime 默认值 | `workers=100` |
+| Volcano | `volcano-scheduler`，实际调度 Pod | `500m / 8` | 未设置 | `1000/1000` | 未额外修改 |
+| Volcano | `volcano-controllers`，管理 Job、PodGroup 和 Queue | `500m / 8` | 未设置 | `1000/1000` | Job、GC、PodGroup worker 均为 `100` |
+| Volcano | `volcano-admission`，负责准入 | `500m / 8` | 未设置 | `1000/1000` | 未额外修改 |
+| YuniKorn | `yunikorn-scheduler`，实际调度 Pod | `500m / 8` | 未设置 | 测试 ConfigMap 设置 `1000/1000` | 未额外修改 |
+| YuniKorn | `yunikorn-admission-controller`，负责注入和校验 | `500m / 8` | 未设置 | 未单独覆盖，使用上游默认值 | 未额外修改 |
+
+除默认 `kube-scheduler` 外，Kueue、Coscheduling、Volcano 和 YuniKorn 的 8 个 Deployment 均采用 `500m/8 CPU` 且不设置内存 request/limit。YuniKorn Scheduler 与 Admission 也不设置 `GOMEMLIMIT` 或 `GOGC`。
+
+#### Kueue 与 Coscheduling
+
+- Kueue 版本为 `v0.19.0`。Kueue 自身负责工作负载准入，不直接替代 Pod Scheduler。
+- 每个测试队列由命名空间 `bench-kueue` 中的 LocalQueue 关联一个 ClusterQueue；ClusterQueue 只选择该测试命名空间，加入 Cohort `team`，使用 ResourceFlavor `default`，CPU/内存名义配额取本轮队列容量。
+- 本轮 `PREEMPTION=false`，因此 ClusterQueue 不配置 Kueue preemption 策略。
+- 非 Gang 场景没有设置 `schedulerName`；Kueue 准入并解除 Job 的 suspend 后，Pod 由 Kubernetes `v1.34.8` 默认 `kube-scheduler` 调度。
+- Gang 场景额外创建 PodGroup，`minMember` 等于该 Job 的 Pod 数、`scheduleTimeoutSeconds=300`；Pod 设置 `schedulerName: coscheduling` 并关联 PodGroup。
+- Coscheduling 来自 Scheduler Plugins `v0.34.7`，启用 `Coscheduling` MultiPoint 插件，并将 QueueSort 独占配置为 `Coscheduling`；Permit 等待上限为 `60s`。
+- Kueue Controller 关闭 leader election，并设置 `DisableWaitForPodsReady=true`。
+
+#### Volcano
+
+- Volcano 版本为 `v1.15.1`，所有测试 Pod 都使用 `schedulerName: volcano`。
+- `TestInit` 在每个 Volcano Case 前临时替换 Scheduler ConfigMap。本轮 `PREEMPTION=false`，实际 actions 为 `enqueue, allocate, backfill, reclaim`，没有启用 `preempt` action。
+- 非 Gang 场景的第一层插件为 `priority`；Gang 场景为 `priority` 和 `gang`，其中 `gang.enablePreemptable=false`。
+- 两种模式的第二层插件均为 `predicates` 和 `capacity`，并设置 `capacity.enableHierarchy=true`。因此本轮实验没有使用空闲基线中的 `drf`、`proportion`、`nodeorder` 或 `binpack` 插件链。
+- 测试创建专用父队列 `benchmark-root`（父级为内置 `root`），将总 CPU/内存容量写入该父队列；所有 `test-queue-*` 都以它为 parent。队列允许 reclaim，PriorityClass 的 `preemptionPolicy` 为 `Never`。
+
+#### YuniKorn
+
+- YuniKorn 版本为 `v1.9.0`，所有测试 Pod 都使用 `schedulerName: yunikorn`。
+- `TestInit` 临时创建 `yunikorn-configs`，并创建 `root.sandbox` 下的专用测试叶子队列；本轮普通队列为 `root.sandbox.long-term-research-0`。
+- 叶子队列的 guaranteed/max CPU 和内存来自本轮队列容量；不同优先级队列使用 `priority.offset`：普通 `0`、business-impacting `1000`、human-critical `1000000`。本轮只创建 1 个普通队列，且 `PREEMPTION=false`，未配置 YuniKorn preemption policy。
+- Gang 场景通过 Job PodTemplate 注解声明 TaskGroup，`minMember` 等于 Job Pod 数，`gangSchedulingStyle=Hard`，`placeholderTimeoutInSeconds=600`；非 Gang 场景不写入这些 TaskGroup/Gang 注解。
+
+#### 三套方案共同的工作负载约束
+
+- 每个场景均使用 1000 个 KWOK Worker Node；测试 Pod 固定选择 `type=kwok`，并容忍 `kwok.x-k8s.io/node=fake:NoSchedule`。
+- 每个 Pod 默认请求并限制 `1 CPU / 1Gi`，每个场景总计 10000 个 Pod；默认队列总容量为 `10000 CPU / 10000Gi`。
+- 本轮 `PREEMPTION=false`，场景 1 至 4 为非 Gang，场景 5 至 8 为 Gang；除了 Gang 相关差异，三套方案使用相同的 Job/Pod 规模和节点约束。
+
+### 19.3 八个场景的时间边界与结果目录
+
+以下 `CST` 均指中国标准时间（UTC+8）。
+
+| 场景 | 模式与参数 | CST（UTC+8）时间边界 | 耗时 | 指标时间窗（毫秒） | 结果目录 |
 | ---: | --- | --- | ---: | --- | --- |
-| 1 | 非 Gang，`10000 job × 1 pod` | `13:39:34` 至 `13:48:13` | `8m39s` | `1786023574969` 至 `1786024017486` | `results/1786024035` |
-| 2 | 非 Gang，`500 job × 20 pod` | `13:48:13` 至 `13:53:14` | `5m01s` | `1786024093526` 至 `1786024318944` | `results/1786024336` |
-| 3 | 非 Gang，`20 job × 500 pod` | `13:53:14` 至 `13:58:15` | `5m01s` | `1786024395118` 至 `1786024619685` | `results/1786024637` |
-| 4 | 非 Gang，`1 job × 10000 pod` | `13:58:15` 至 `14:03:23` | `5m08s` | `1786024695535` 至 `1786024927127` | `results/1786024945` |
-| 5 | Gang，`10000 job × 1 pod` | `14:03:23` 至 `14:13:13` | `9m50s` | `1786025003815` 至 `1786025516190` | `results/1786025534` |
-| 6 | Gang，`500 job × 20 pod` | `14:13:13` 至 `14:19:25` | `6m12s` | `1786025593294` 至 `1786025889158` | `results/1786025907` |
-| 7 | Gang，`20 job × 500 pod` | `14:19:25` 至 `14:25:59` | `6m34s` | `1786025965417` 至 `1786026282026` | `results/1786026301` |
-| 8 | Gang，`1 job × 10000 pod` | `14:25:59` 至 `14:34:33` | `8m34s` | `1786026360099` 至 `1786026796787` | `results/1786026814` |
+| 1 | 非 Gang，`10000 job × 1 pod` | `2026-08-06 21:39:34` 至 `2026-08-06 21:48:13` | `8m39s` | `1786023574969` 至 `1786024017486` | `results/1786024035` |
+| 2 | 非 Gang，`500 job × 20 pod` | `2026-08-06 21:48:13` 至 `2026-08-06 21:53:14` | `5m01s` | `1786024093526` 至 `1786024318944` | `results/1786024336` |
+| 3 | 非 Gang，`20 job × 500 pod` | `2026-08-06 21:53:14` 至 `2026-08-06 21:58:15` | `5m01s` | `1786024395118` 至 `1786024619685` | `results/1786024637` |
+| 4 | 非 Gang，`1 job × 10000 pod` | `2026-08-06 21:58:15` 至 `2026-08-06 22:03:23` | `5m08s` | `1786024695535` 至 `1786024927127` | `results/1786024945` |
+| 5 | Gang，`10000 job × 1 pod` | `2026-08-06 22:03:23` 至 `2026-08-06 22:13:13` | `9m50s` | `1786025003815` 至 `1786025516190` | `results/1786025534` |
+| 6 | Gang，`500 job × 20 pod` | `2026-08-06 22:13:13` 至 `2026-08-06 22:19:25` | `6m12s` | `1786025593294` 至 `1786025889158` | `results/1786025907` |
+| 7 | Gang，`20 job × 500 pod` | `2026-08-06 22:19:25` 至 `2026-08-06 22:25:59` | `6m34s` | `1786025965417` 至 `1786026282026` | `results/1786026301` |
+| 8 | Gang，`1 job × 10000 pod` | `2026-08-06 22:25:59` 至 `2026-08-06 22:34:33` | `8m34s` | `1786026360099` 至 `1786026796787` | `results/1786026814` |
 
 场景边界包含调度组件切换、三套调度器测试、恢复及结果图片保存；八行耗时合计为 `54m59s`，与 Wrapper 总时间一致。
 
-### 19.3 二十四个调度器 Case 的时间与指标屏障
+### 19.4 二十四个调度器 Case 的时间与指标屏障
 
-| 场景 | 调度方案 | UTC 起止时间 | `TestBatchJob` | Prometheus 抓取屏障 |
+| 场景 | 调度方案 | CST（UTC+8）起止时间 | `TestBatchJob` | Prometheus 抓取屏障 |
 | ---: | --- | --- | ---: | --- |
-| 1 | Kueue | `13:39:42` 至 `13:41:41` | 通过，`119.00s` | 通过，`total=140171` |
-| 1 | Volcano | `13:42:14` 至 `13:44:12` | 通过，`118.10s` | 通过，`total=130095` |
-| 1 | YuniKorn | `13:44:55` 至 `13:46:53` | 通过，`118.04s` | 通过，`total=120167` |
-| 2 | Kueue | `13:48:20` 至 `13:49:07` | 通过，`47.09s` | 通过，`total=64967` |
-| 2 | Volcano | `13:49:40` 至 `13:50:23` | 通过，`43.63s` | 通过，`total=65190` |
-| 2 | YuniKorn | `13:51:08` 至 `13:51:53` | 通过，`44.55s` | 通过，`total=68917` |
-| 3 | Kueue | `13:53:24` 至 `13:54:04` | 通过，`40.30s` | 通过，`total=61060` |
-| 3 | Volcano | `13:54:37` 至 `13:55:17` | 通过，`40.12s` | 通过，`total=55819` |
-| 3 | YuniKorn | `13:56:04` 至 `13:56:55` | 通过，`51.36s` | 通过，`total=60815` |
-| 4 | Kueue | `13:58:23` 至 `13:59:13` | 通过，`50.03s` | 通过，`total=60080` |
-| 4 | Volcano | `13:59:47` 至 `14:00:27` | 通过，`40.03s` | 通过，`total=51534` |
-| 4 | YuniKorn | `14:01:12` 至 `14:02:02` | 通过，`50.04s` | 通过，`total=60082` |
-| 5 | Kueue | `14:03:32` 至 `14:06:13` | 通过，`160.76s` | 通过，`total=140225` |
-| 5 | Volcano | `14:07:12` 至 `14:09:10` | 通过，`118.29s` | 通过，`total=130073` |
-| 5 | YuniKorn | `14:09:53` 至 `14:11:51` | 通过，`118.03s` | 通过，`total=163595` |
-| 6 | Kueue | `14:13:22` 至 `14:14:22` | 通过，`59.87s` | 通过，`total=64235` |
-| 6 | Volcano | `14:14:54` 至 `14:15:38` | 通过，`44.05s` | 通过，`total=64526` |
-| 6 | YuniKorn | `14:16:30` 至 `14:18:04` | 通过，`94.17s` | 通过，`total=104253` |
-| 7 | Kueue | `14:19:33` 至 `14:20:44` | 通过，`70.56s` | 通过，`total=60699` |
-| 7 | Volcano | `14:21:14` 至 `14:22:05` | 通过，`50.14s` | 通过，`total=59204` |
-| 7 | YuniKorn | `14:22:57` 至 `14:24:37` | 通过，`100.57s` | 通过，`total=100242` |
-| 8 | Kueue | `14:26:08` 至 `14:27:48` | 通过，`100.03s` | 通过，`total=62689` |
-| 8 | Volcano | `14:28:19` 至 `14:29:39` | 通过，`80.03s` | 通过，`total=66594` |
-| 8 | YuniKorn | `14:30:22` 至 `14:33:12` | 通过，`170.03s` | 通过，`total=101070` |
+| 1 | Kueue | `2026-08-06 21:39:42` 至 `2026-08-06 21:41:41` | 通过，`119.00s` | 通过，`total=140171` |
+| 1 | Volcano | `2026-08-06 21:42:14` 至 `2026-08-06 21:44:12` | 通过，`118.10s` | 通过，`total=130095` |
+| 1 | YuniKorn | `2026-08-06 21:44:55` 至 `2026-08-06 21:46:53` | 通过，`118.04s` | 通过，`total=120167` |
+| 2 | Kueue | `2026-08-06 21:48:20` 至 `2026-08-06 21:49:07` | 通过，`47.09s` | 通过，`total=64967` |
+| 2 | Volcano | `2026-08-06 21:49:40` 至 `2026-08-06 21:50:23` | 通过，`43.63s` | 通过，`total=65190` |
+| 2 | YuniKorn | `2026-08-06 21:51:08` 至 `2026-08-06 21:51:53` | 通过，`44.55s` | 通过，`total=68917` |
+| 3 | Kueue | `2026-08-06 21:53:24` 至 `2026-08-06 21:54:04` | 通过，`40.30s` | 通过，`total=61060` |
+| 3 | Volcano | `2026-08-06 21:54:37` 至 `2026-08-06 21:55:17` | 通过，`40.12s` | 通过，`total=55819` |
+| 3 | YuniKorn | `2026-08-06 21:56:04` 至 `2026-08-06 21:56:55` | 通过，`51.36s` | 通过，`total=60815` |
+| 4 | Kueue | `2026-08-06 21:58:23` 至 `2026-08-06 21:59:13` | 通过，`50.03s` | 通过，`total=60080` |
+| 4 | Volcano | `2026-08-06 21:59:47` 至 `2026-08-06 22:00:27` | 通过，`40.03s` | 通过，`total=51534` |
+| 4 | YuniKorn | `2026-08-06 22:01:12` 至 `2026-08-06 22:02:02` | 通过，`50.04s` | 通过，`total=60082` |
+| 5 | Kueue | `2026-08-06 22:03:32` 至 `2026-08-06 22:06:13` | 通过，`160.76s` | 通过，`total=140225` |
+| 5 | Volcano | `2026-08-06 22:07:12` 至 `2026-08-06 22:09:10` | 通过，`118.29s` | 通过，`total=130073` |
+| 5 | YuniKorn | `2026-08-06 22:09:53` 至 `2026-08-06 22:11:51` | 通过，`118.03s` | 通过，`total=163595` |
+| 6 | Kueue | `2026-08-06 22:13:22` 至 `2026-08-06 22:14:22` | 通过，`59.87s` | 通过，`total=64235` |
+| 6 | Volcano | `2026-08-06 22:14:54` 至 `2026-08-06 22:15:38` | 通过，`44.05s` | 通过，`total=64526` |
+| 6 | YuniKorn | `2026-08-06 22:16:30` 至 `2026-08-06 22:18:04` | 通过，`94.17s` | 通过，`total=104253` |
+| 7 | Kueue | `2026-08-06 22:19:33` 至 `2026-08-06 22:20:44` | 通过，`70.56s` | 通过，`total=60699` |
+| 7 | Volcano | `2026-08-06 22:21:14` 至 `2026-08-06 22:22:05` | 通过，`50.14s` | 通过，`total=59204` |
+| 7 | YuniKorn | `2026-08-06 22:22:57` 至 `2026-08-06 22:24:37` | 通过，`100.57s` | 通过，`total=100242` |
+| 8 | Kueue | `2026-08-06 22:26:08` 至 `2026-08-06 22:27:48` | 通过，`100.03s` | 通过，`total=62689` |
+| 8 | Volcano | `2026-08-06 22:28:19` 至 `2026-08-06 22:29:39` | 通过，`80.03s` | 通过，`total=66594` |
+| 8 | YuniKorn | `2026-08-06 22:30:22` 至 `2026-08-06 22:33:12` | 通过，`170.03s` | 通过，`total=101070` |
 
 24 组 Case 均出现明确的 `--- PASS: TestBatchJob`，没有 `FAIL`、Go test timeout、组件连接拒绝或 resident state 冲突。24 个 Audit Exporter 指标稳定屏障也全部完成，且 Prometheus 样本时间均晚于对应 Exporter 稳定时刻。
 
-### 19.4 结果制品检查
+### 19.5 结果制品检查
 
 八个结果目录均包含 `envs.txt`、`result-window.txt`、三份非空调度方案审计文件和八张 Grafana PNG，共计 24 份审计文件与 64 张图片。
 
@@ -641,7 +691,7 @@ Kueue 的 10000 个 PodGroup 异步删除请求成功提交，命名空间资源
 - 其余 23 份文件的磁盘分配大小明显小于表观大小，确认存在截断后继续写入形成的稀疏 NUL 空洞，因此不能视为严格有效的纯 JSONL 文件。
 - 该 NUL 问题与此前决定一致，本轮不修复；Prometheus 指标、Grafana 曲线和测试判定均未受影响。
 
-### 19.5 测试后恢复验收
+### 19.6 测试后恢复验收
 
 测试结束后执行并通过：
 
@@ -652,6 +702,6 @@ Kueue 的 10000 个 PodGroup 异步删除请求成功提交，命名空间资源
 - `verify-monitoring.sh` 通过，Audit Exporter、Prometheus、Grafana、Image Renderer、Operator 和 kube-state-metrics 均健康。
 - Grafana Ingress `verify.sh` 通过，服务器回环入口与持久 Ingress 均正常。
 
-### 19.6 最终结论
+### 19.7 最终结论
 
 异步 Kueue 高基数清理与 Grafana Dashboard 变量修复已经通过完整 8 场景、24 Case 验证。此前场景 5 的 Kueue 清理超时、Volcano resident state/Admission 连锁失败和 64 张 `No data` 图片均未复现。本轮在 T0 直接满足全部强制验收条件，最终判定为完整测试通过。
