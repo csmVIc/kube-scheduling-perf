@@ -151,9 +151,9 @@ end-$(1):
 	mkdir -p ./logs
 	$(MAKE) wait-audit-metrics-scraped SCHEDULER=$(1)
 	mkdir -p ./tmp
-	@timestamp="$$(date +%s%3N)"; \
-	printf '%s\n' "$$timestamp" > ./tmp/result-$(1)-to-millis; \
-	printf '%s\n' "$$timestamp" > ./tmp/result-to-millis
+	@timestamp="$$$$(date +%s%3N)"; \
+	printf '%s\n' "$$$$timestamp" > ./tmp/result-$(1)-to-millis; \
+	printf '%s\n' "$$$$timestamp" > ./tmp/result-to-millis
 	cp $(RESIDENT_AUDIT_LOG) ./logs/kube-apiserver-audit.$(1).log
 	$(MAKE) down-$(1)
 
