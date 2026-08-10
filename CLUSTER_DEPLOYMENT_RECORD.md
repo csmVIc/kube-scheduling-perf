@@ -5,7 +5,7 @@
 本文记录远端调度基准集群的实际部署状态、安装来源、版本、关键配置、镜像摘要、重建顺序和已知风险，供故障恢复、版本更新和实验环境审计使用。
 
 - 初始记录时间：`2026-08-03T12:35:49Z`（北京时间 `2026-08-03 20:35:49`）
-- 最近变更时间：`2026-08-06`，完成场景 5 高基数 Kueue 异步清理与 Grafana 结果链路定向验证
+- 最近变更时间：`2026-08-10`，完成固定空闲基线与 `500ms` 采集配置的 8 场景、24 Case 完整验证
 - 服务器：`104.105.137.213`
 - 当前唯一 Kind 集群：`volcano-benchmark-1348`
 - Kubernetes：`v1.34.8`
@@ -332,7 +332,7 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 
 安全说明：宿主机入口使用 `0.0.0.0:31003/31004/31005`，是否能被公网访问取决于服务器防火墙和云安全组。Grafana Ingress 已从外部验证可访问，且 Grafana 启用了匿名 Viewer，因此 `31005` 会公开基准指标；不需要公网访问时应在防火墙或云安全组限制来源。Grafana 密码保存在 Kubernetes Secret 中，不写入本文。
 
-Grafana 启用了匿名 Viewer 和 `/grafana/` 子路径。`perf` Dashboard 由 `manifests/perf-dashboard.json` 创建为 `scheduling-perf-dashboard` ConfigMap，固定 UID 为 `perf`；当前 20 条可见查询均使用 `exported_namespace`。Image Renderer 负责 `/render/d-solo/perf` 图片接口；场景 5 已验证 `panel-1` 至 `panel-8` 均能渲染实际曲线。`verify-monitoring.sh` 的基础 PNG 检查仍只属于连通性验收，完整实验还需检查图片内容。
+Grafana 启用了匿名 Viewer 和 `/grafana/` 子路径。`perf` Dashboard 由 `manifests/perf-dashboard.json` 创建为 `scheduling-perf-dashboard` ConfigMap，固定 UID 为 `perf`；当前 20 条可见查询均使用 `exported_namespace`。Image Renderer 负责 `/render/d-solo/perf` 图片接口；完整 8 场景已经验证 `panel-1` 至 `panel-8` 均能渲染实际曲线。图片保存或内容检查只作为观察项，不作为后续完整测试通过条件。
 
 ### Grafana Ingress
 
@@ -376,7 +376,7 @@ Grafana 启用了匿名 Viewer 和 `/grafana/` 子路径。`perf` Dashboard 由 
 - Grafana Dashboard 由 ConfigMap Sidecar 重新加载，可重建；Grafana 本地状态和手工修改不持久
 - API Server 审计日志位于服务器 `/root/benchmark-1348-deploy/logs`，独立于 Prometheus Pod，集群删除前仍可单独备份
 
-正式实验结果不能只保存在 Prometheus/Grafana 内，必须另行导出或保存到仓库的 results 目录。
+图片和原始审计日志保存失败不影响完整测试判定；完整测试以 24 组 Case、指标抓取屏障和最终基线健康为核心条件。若需要跨越监控 Pod 生命周期长期回溯，仍应另行导出数据，因为 Prometheus/Grafana 的 `emptyDir` 会在 Pod 重建后丢失。
 
 ## 11. 实际运行镜像摘要
 
@@ -518,9 +518,9 @@ PNG 签名和 HTTP 200 都不能排除面板显示 `No data`。完整实验验�
 | `manifests/kueue-manager-config.yaml` | `4ef6994a2568fc4ad9b5aac90b27107cc3c985405810d274d99d70425497057a` |
 | `manifests/coscheduling-configmap.yaml` | `734c327e14ca405679e5bb57e875386aa11981e17dfbe7e22a3749b2efc4ebbe` |
 | `manifests/benchmark-namespaces.yaml` | `e766ab1fc5c3de100f727a5ac46fcaee8ae3e9d0eb9eb682c4769b715fbba74f` |
-| `manifests/audit-exporter.yaml` | `e784ca7241ffb9b1b3055505643d3a34b92b55e47395bd6670562e393d1039a8` |
+| `manifests/audit-exporter.yaml` | `faa30a71d16ac8cfaecea99cc1e2705c393fba429c949026f91e500970fa5b0c` |
 | `manifests/audit-dashboard.yaml` | `558dfb641b07815b1dba8467a7939516be88ce3b07016f448d08e775c81d82fb` |
-| `manifests/perf-dashboard.json` | `4f86fba9eb59e5496b80c3c09fb1491e88554662b8b5acecf4f54e22b025f4f3` |
+| `manifests/perf-dashboard.json` | `df66405f2b9be9166cb1ed09cf9bf9ffc1e191deb6a2811fcf272cc5aaac188b` |
 | `manifests/scheduler-smoke-tests.yaml` | `8574169b65bd048ed085c344bdbf6650cae18773c44001a7bef1bfc0acd8aa45` |
 | `scripts/create-canary-cluster.sh` | `796c7aee3595252d492d937a6ebb76c7f6fd609806a419aae746c7b42c14ce03` |
 | `scripts/configure-control-plane-baseline.sh` | `8e533ca29ef7b45751fa5c178f04cf088ae55f74d878b17907e6d1c2831d7a47` |
@@ -630,3 +630,13 @@ Grafana Ingress 的版本化部署源位于仓库，当前文件指纹如下：
 - Grafana 渲染使用原生 `$__all` 变量；8 张 PNG 均包含实际曲线，不再是 `No data`。实时 Dashboard 的 20 条可见查询全部使用 `exported_namespace`，远端权威部署文件指纹已更新到第 16 节。
 - 本轮不处理历史审计日志稀疏 NUL 空洞，也没有重跑全部 8 个场景；因此只将场景 5 原失败链路判定为修复，不改变上一轮完整测试的历史结论。
 - 测试后 `.resident-state` 和三套实验资源均无残留；`1001/1001` Node、8 个调度组件、Audit Exporter、Prometheus、Grafana 和 Ingress 验收通过。
+
+## 23. 2026-08-10 固定空闲基线与 500ms 完整验证
+
+- Audit Exporter ServiceMonitor 的抓取间隔和超时均调整为 `500ms`；主 Dashboard 的 8 个面板和 8 个相对时间 Dashboard 的 4 个指标面板同步采用 `500ms` 最小查询步长。Prometheus 全局 scrape `5s` 与 evaluation `30s` 保持不变。
+- 调度组件和 Audit Exporter 的空闲基线固定为 `1` 副本。实验不再保存/恢复 Deployment、ConfigMap 或 Exporter 快照；Volcano 与 YuniKorn 配置只在内容变化时原地更新并重启对应 Scheduler，内容相同时不操作。
+- 首轮 T0 使用提交 `1bac63e74bd57890f076ba5990e2b6a8596dd311`。场景 1 的 3 个 Case 与指标屏障全部通过，随后结果时间窗因新增 Make 双重展开少一层美元符转义而写成 `imestamp`。该源码新增问题由提交 `d774bda446a55279ad3d95a2e9523fe1c9b2316b` 定向修复。
+- 修复后 T1 于 `2026-08-10 19:48:42` 至 `2026-08-10 20:40:37` CST 运行，总耗时 `3115.34s`（`51m55.34s`）。8 个场景、24/24 组 `TestBatchJob` 和 24/24 个 Prometheus 抓取屏障全部通过；运行归档位于 `/root/benchmark-full-runs/full-500ms-t1-20260810T114842Z`。
+- 本轮实际生成 8 个结果目录、64 张 PNG 和 24 份审计日志，但它们不作为后续完整测试的通过条件。23 份审计文件仍存在已知稀疏 NUL 空洞，只记录、不修复。
+- 测试后 `make down`、三套实验资源零残留断言、基础集群、调度器、监控和 Ingress 验收全部通过；`1001/1001` Node Ready，8 个调度 Deployment 与 Audit Exporter 均为 `1/1 Ready`，Prometheus 未重启。
+- 完整场景边界、24 个 Case 的时间和指标结果见 `RESIDENT_CLUSTER_FULL_TEST_REPORT.md` 第 20 节。

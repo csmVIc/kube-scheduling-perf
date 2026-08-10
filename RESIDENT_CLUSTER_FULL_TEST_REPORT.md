@@ -2,7 +2,7 @@
 
 ## 1. 结论
 
-常驻集群源码改造、基线纠正、最小测试和三轮独立完整测试均已执行完毕。第二轮暴露的 Kueue 高基数清理与 Grafana 空图片问题经过最小修复、场景 5 定向复测和第三轮完整复测后均未复现；最新完整测试 8 个场景、24 组 Case 全部通过，常驻集群方案最终验收通过。
+常驻集群源码改造、基线纠正、最小测试及多轮独立完整测试均已执行完毕。第二轮暴露的 Kueue 高基数清理与 Grafana 空图片问题经过最小修复、场景 5 定向复测和后续完整复测后均未复现；最新的固定空闲基线与 `500ms` 采集完整测试中，8 个场景、24 组 Case 和 24 个 Prometheus 抓取屏障全部通过。
 
 - 基线纠正后的场景 1 最小测试首轮通过，Kueue、Volcano、YuniKorn 均完成调度和结果采集。
 - 第一轮独立完整测试在场景 3 因未经批准加入的 Prometheus `4Gi` 内存上限触发 OOM 而失败；随后只实施了计划允许的一轮修复。
@@ -10,6 +10,7 @@
 - 在 `5072e2e` 基础上提交 `708f8fa`：Kueue 命名空间资源改为异步删除并等待最多 10 分钟归零，Grafana 渲染变量改用原生 `$__all`。
 - `708f8fa` 的场景 5 定向复测中三套调度器全部通过，Kueue 的 10000 个 PodGroup 清理完成，8 张 Grafana 图片均包含实际曲线。
 - 第三轮使用 `b2fd509` 在独立 `tmux` 中运行完整 `make`，24/24 组 Case 通过，8/8 个结果目录完成，64 张 Grafana 图片均包含实际曲线，总耗时 `54m59s`。
+- 固定空闲基线与 `500ms` 采集改造后，首轮暴露并定向修复了新增时间窗的 Make 转义错误；修复轮使用 `d774bda` 再次完成全部 24 组 Case，总耗时 `51m55.34s`。
 - 审计日志稀疏 NUL 空洞按约定只检查和记录、不作为失败条件且暂不修复；完整测试通过后 `README.md` 已按常驻集群流程重构。
 - 测试结束后集群已恢复固定基线，`1001/1001` Node、8 个调度组件和监控组件均健康。
 
@@ -26,8 +27,9 @@
 | 第二轮独立完整测试 | `c3805c84e68fa233f76041ec720b7ccbbb20cbe8` | `fix: tolerate transient metrics outages` |
 | 场景 5 定向修复验证 | `708f8fafb2ba9b86641d2f3a8201b168561905b0` | `fix: make Kueue cleanup asynchronous` |
 | 第三轮独立完整测试 | `b2fd509cabfd837e34fe9439d5855c32c531c710` | 24/24 组 Case 通过，常驻集群方案最终验收通过 |
+| 固定空闲基线与 500ms 完整测试 | `d774bda446a55279ad3d95a2e9523fe1c9b2316b` | 24/24 组 Case 与 24/24 个指标屏障通过 |
 
-服务器仓库在每轮测试前均同步到表中的对应 Commit。最新一次完整测试使用 `b2fd509cabfd837e34fe9439d5855c32c531c710`，详细结果见第 19 节。
+服务器仓库在每轮测试前均同步到表中的对应 Commit。最新一次完整测试使用 `d774bda446a55279ad3d95a2e9523fe1c9b2316b`，详细结果见第 20 节。
 
 ### 2.2 集群和组件
 
@@ -705,3 +707,135 @@ Kueue 的 10000 个 PodGroup 异步删除请求成功提交，命名空间资源
 ### 19.7 最终结论
 
 异步 Kueue 高基数清理与 Grafana Dashboard 变量修复已经通过完整 8 场景、24 Case 验证。此前场景 5 的 Kueue 清理超时、Volcano resident state/Admission 连锁失败和 64 张 `No data` 图片均未复现。本轮在 T0 直接满足全部强制验收条件，最终判定为完整测试通过。
+
+## 20. 500ms 采集与固定空闲基线改造后的完整测试（通过）
+
+### 20.1 执行概要
+
+本轮验证 Audit Exporter `500ms` 抓取、主 Dashboard 与八个相对时间 Dashboard 的 `500ms` 查询步长，以及不再保存/恢复调度组件快照的固定空闲基线流程。测试在服务器独立 `tmux` 会话中运行，SSH 或网络波动不会终止测试。
+
+| 项目 | 首轮 T0 | 修复后 T1 |
+| --- | --- | --- |
+| 被测 Commit | `1bac63e74bd57890f076ba5990e2b6a8596dd311` | `d774bda446a55279ad3d95a2e9523fe1c9b2316b` |
+| 命令 | `make` | `make` |
+| 独立会话 | `tmux resident-full-500ms-20260810T113814Z` | `tmux resident-full-500ms-t1-20260810T114842Z` |
+| CST（UTC+8）时间 | `2026-08-10 19:38:14` 至 `2026-08-10 19:45:40` | `2026-08-10 19:48:42` 至 `2026-08-10 20:40:37` |
+| 总耗时 | `445.69s`（`7m25.69s`） | `3115.34s`（`51m55.34s`） |
+| Wrapper 退出码 | `2` | `0` |
+| `make down` 退出码 | `0` | `0` |
+| 子测试结果 | 场景 1 的 `3/3` Case 通过，保存结果前失败 | `24/24` Case 全部通过 |
+| 结果保存 | 未生成正式场景目录 | `8/8` 个场景目录完成 |
+| 结论 | 源码新增时间窗写入错误，定向修复后重测 | 完整测试通过 |
+| 运行归档 | `/root/benchmark-full-runs/full-500ms-20260810T113814Z` | `/root/benchmark-full-runs/full-500ms-t1-20260810T114842Z` |
+
+### 20.2 T0 失败、根因与定向修复
+
+T0 中场景 1 的 Kueue、Volcano、YuniKorn 均通过，耗时分别为 `118.03s`、`118.04s`、`118.04s`，三个 Prometheus 抓取屏障也全部通过。随后 `save-result-images.sh` 在参数校验阶段退出，尚未向 Grafana 发起渲染请求。
+
+直接根因是新增每调度器毫秒时间窗时，在 `define test-scheduler` 经 `eval` 展开两次的上下文中只使用了一层 Make 美元符转义。生成的 shell 命令把 `result-<scheduler>-to-millis` 和 `result-to-millis` 写成字符串 `imestamp`，而不是 13 位 epoch 毫秒。该问题是本轮新增源码造成，不是 500ms 抓取、Grafana、调度器或集群问题。
+
+提交 `d774bda446a55279ad3d95a2e9523fe1c9b2316b` 只增加缺失的一层美元符转义。修复后 `make -n end-kueue/end-volcano/end-yunikorn` 均展开为正确的 `timestamp="$(date +%s%3N)"` 和 `$timestamp` 写入；T1 首个 Kueue Case 又确认两个结束时间文件均为正确的 13 位毫秒值。本轮没有扩大修复范围。
+
+### 20.3 各调度方案与公共配置
+
+组件版本和资源基线与第 19.2 节一致。公共性能参数如下：
+
+| 对比方案 | 组件与作用 | CPU request/limit | 内存 request/limit | Kubernetes client QPS/Burst | 并发或 Worker |
+| --- | --- | --- | --- | --- | --- |
+| Kueue 非 Gang | 默认 `kube-scheduler`，实际调度 Pod | `1 / 8` | 未设置 | `1000/1000` | 未额外修改 |
+| Kueue 准入 | `kueue-controller-manager` | `500m / 8` | 未设置 | `1000/1000` | 六类已启用 Controller 均为 `100` |
+| Kueue Gang | `coscheduling`，实际调度 Pod | `500m / 8` | 未设置 | `1000/1000` | Scheduler `parallelism=16` |
+| Kueue Gang 辅助 | `scheduler-plugins-controller` | `500m / 8` | 未设置 | 配置 `1000/1000`，受上游缺陷影响仍使用默认有效值 | `workers=100` |
+| Volcano | Scheduler、Controller、Admission | `500m / 8` | 未设置 | 均为 `1000/1000` | Controller 三类 worker 均为 `100` |
+| YuniKorn | Scheduler | `500m / 8` | 未设置 | 测试 ConfigMap 设置 `1000/1000` | 未额外修改 |
+| YuniKorn | Admission Controller | `500m / 8` | 未设置 | 使用上游默认值 | 未额外修改 |
+
+- Kueue `v0.19.0` 负责准入。非 Gang Pod 由 Kubernetes `v1.34.8` 默认 Scheduler 调度；Gang Pod 使用 Scheduler Plugins `v0.34.7` 的 Coscheduling，并创建对应 PodGroup。
+- Volcano `v1.15.1` 使用 `enqueue, allocate, backfill, reclaim` actions；非 Gang 第一层为 `priority`，Gang 为 `priority/gang`；第二层为 `predicates/capacity`，并启用层级 Capacity。测试队列统一挂在 `benchmark-root` 下。
+- YuniKorn `v1.9.0` 使用 `root.sandbox` 下的测试叶子队列；Gang 场景使用 Hard TaskGroup、`minMember` 和 `placeholderTimeoutInSeconds=600`。
+- 三套方案均使用 1000 个 KWOK Worker Node；每个场景 10,000 个工作负载 Pod，每个 Pod 请求/限制 `1 CPU / 1Gi`，本轮 `PREEMPTION=false`。
+- `up-<scheduler>` 不再保存 Deployment、ConfigMap 或 Audit Exporter 快照，只将目标调度组件设为 `1`、其他组件设为 `0`。Volcano 和 YuniKorn ConfigMap 仅在内容变化时原地更新并重启 Scheduler；内容一致时不操作。每轮结束和 `make down` 都将八个调度组件及 Audit Exporter 收敛到 `1` 副本，不执行配置恢复。
+- Audit Exporter ServiceMonitor 的抓取间隔和超时均为 `500ms`；主 Dashboard 的 8 个面板和相对 Dashboard 的 4 个指标面板最小查询步长均为 `500ms`。`rate` 窗口继续使用 `5s`。
+
+### 20.4 八个场景的时间边界与结果目录
+
+以下时间均为 CST（UTC+8），格式可以直接用于 Grafana。场景边界包含三套调度器切换、测试、清理、结果保存和相对 Dashboard 更新；指标时间窗是 `result-window.txt` 中的精确 epoch 毫秒。
+
+| 场景 | 模式与参数 | CST（UTC+8）时间边界 | 耗时 | 指标时间窗（毫秒） | 结果目录 |
+| ---: | --- | --- | ---: | --- | --- |
+| 1 | 非 Gang，`10000 job × 1 pod` | `2026-08-10 19:48:42` 至 `2026-08-10 19:56:57` | `8m14s` | `1786362522857` 至 `1786362943807` | `results/1786362958` |
+| 2 | 非 Gang，`500 job × 20 pod` | `2026-08-10 19:56:57` 至 `2026-08-10 20:01:30` | `4m33s` | `1786363017319` 至 `1786363216815` | `results/1786363231` |
+| 3 | 非 Gang，`20 job × 500 pod` | `2026-08-10 20:01:30` 至 `2026-08-10 20:06:01` | `4m31s` | `1786363290282` 至 `1786363486458` | `results/1786363502` |
+| 4 | 非 Gang，`1 job × 10000 pod` | `2026-08-10 20:06:01` 至 `2026-08-10 20:10:43` | `4m42s` | `1786363561133` 至 `1786363769603` | `results/1786363784` |
+| 5 | Gang，`10000 job × 1 pod` | `2026-08-10 20:10:43` 至 `2026-08-10 20:20:09` | `9m26s` | `1786363843099` 至 `1786364334979` | `results/1786364350` |
+| 6 | Gang，`500 job × 20 pod` | `2026-08-10 20:20:09` 至 `2026-08-10 20:26:05` | `5m57s` | `1786364409403` 至 `1786364692013` | `results/1786364707` |
+| 7 | Gang，`20 job × 500 pod` | `2026-08-10 20:26:05` 至 `2026-08-10 20:32:35` | `6m30s` | `1786364765957` 至 `1786365082255` | `results/1786365097` |
+| 8 | Gang，`1 job × 10000 pod` | `2026-08-10 20:32:35` 至 `2026-08-10 20:40:37` | `8m02s` | `1786365155845` 至 `1786365563233` | `results/1786365579` |
+
+八行场景耗时合计为 `51m55s`，与 Wrapper 的精确 `3115.34s` 一致。
+
+### 20.5 二十四个 Case 与指标屏障
+
+由于 Go test 输出只记录 Case 耗时、不附绝对时间，以下绝对边界采用可由 Prometheus/Grafana 直接复核的“首个 Pod 创建样本至最终抓取屏障”时间；`TestBatchJob` 列仍是 Go test 的权威完整耗时。所有时间均为 CST（UTC+8）。
+
+| 场景 | 调度方案 | 首个 Pod 至最终抓取屏障 | `TestBatchJob` | Prometheus 抓取屏障 |
+| ---: | --- | --- | ---: | --- |
+| 1 | Kueue | `2026-08-10 19:48:59` 至 `2026-08-10 19:50:52` | 通过，`118.24s` | 通过，`total=140064` |
+| 1 | Volcano | `2026-08-10 19:51:30` 至 `2026-08-10 19:53:17` | 通过，`118.10s` | 通过，`total=130079` |
+| 1 | YuniKorn | `2026-08-10 19:53:59` 至 `2026-08-10 19:55:43` | 通过，`118.08s` | 通过，`total=120069` |
+| 2 | Kueue | `2026-08-10 19:57:29` 至 `2026-08-10 19:57:56` | 通过，`46.45s` | 通过，`total=65041` |
+| 2 | Volcano | `2026-08-10 19:58:45` 至 `2026-08-10 19:59:05` | 通过，`44.04s` | 通过，`total=64976` |
+| 2 | YuniKorn | `2026-08-10 19:59:58` 至 `2026-08-10 20:00:16` | 通过，`44.26s` | 通过，`total=69832` |
+| 3 | Kueue | `2026-08-10 20:02:10` 至 `2026-08-10 20:02:21` | 通过，`40.28s` | 通过，`total=61034` |
+| 3 | Volcano | `2026-08-10 20:03:17` 至 `2026-08-10 20:03:28` | 通过，`40.13s` | 通过，`total=56084` |
+| 3 | YuniKorn | `2026-08-10 20:04:28` 至 `2026-08-10 20:04:46` | 通过，`50.56s` | 通过，`total=60744` |
+| 4 | Kueue | `2026-08-10 20:06:47` 至 `2026-08-10 20:07:02` | 通过，`50.04s` | 通过，`total=60080` |
+| 4 | Volcano | `2026-08-10 20:08:06` 至 `2026-08-10 20:08:12` | 通过，`40.04s` | 通过，`total=50899` |
+| 4 | YuniKorn | `2026-08-10 20:09:19` 至 `2026-08-10 20:09:29` | 通过，`50.04s` | 通过，`total=60083` |
+| 5 | Kueue | `2026-08-10 20:11:39` 至 `2026-08-10 20:13:37` | 通过，`162.75s` | 通过，`total=140194` |
+| 5 | Volcano | `2026-08-10 20:15:17` 至 `2026-08-10 20:16:28` | 通过，`118.12s` | 通过，`total=130070` |
+| 5 | YuniKorn | `2026-08-10 20:17:47` 至 `2026-08-10 20:18:54` | 通过，`118.03s` | 通过，`total=165674` |
+| 6 | Kueue | `2026-08-10 20:21:20` 至 `2026-08-10 20:21:27` | 通过，`59.24s` | 通过，`total=64246` |
+| 6 | Volcano | `2026-08-10 20:22:55` 至 `2026-08-10 20:23:01` | 通过，`44.24s` | 通过，`total=64547` |
+| 6 | YuniKorn | `2026-08-10 20:24:33` 至 `2026-08-10 20:24:52` | 通过，`84.68s` | 通过，`total=104213` |
+| 7 | Kueue | `2026-08-10 20:27:26` 至 `2026-08-10 20:27:32` | 通过，`70.72s` | 通过，`total=60849` |
+| 7 | Volcano | `2026-08-10 20:29:06` 至 `2026-08-10 20:29:15` | 通过，`60.13s` | 通过，`total=71079` |
+| 7 | YuniKorn | `2026-08-10 20:29:38` 至 `2026-08-10 20:31:21` | 通过，`100.47s` | 通过，`total=100153` |
+| 8 | Kueue | `2026-08-10 20:32:49` 至 `2026-08-10 20:34:27` | 通过，`100.04s` | 通过，`total=62880` |
+| 8 | Volcano | `2026-08-10 20:34:57` 至 `2026-08-10 20:36:03` | 通过，`70.04s` | 通过，`total=64755` |
+| 8 | YuniKorn | `2026-08-10 20:36:39` 至 `2026-08-10 20:39:22` | 通过，`170.27s` | 通过，`total=100218` |
+
+运行日志包含 24 个明确的 `--- PASS: TestBatchJob`，没有 `--- FAIL`、Go test timeout、OOM、Webhook connection refused 或调度器状态冲突。24 个指标屏障均确认 Prometheus 样本时间晚于 Exporter 稳定时间。
+
+### 20.6 500ms 指标与 Dashboard 验证
+
+- Prometheus `/api/v1/targets` 显示 Audit Exporter 目标为 `scrapeInterval=500ms`、`scrapeTimeout=500ms`、`health=up`。
+- `Scheduling Performance`（UID `perf`）仍为 8 个面板，8 个面板的最小查询步长均为 `500ms`。
+- `scheduling-perf-relative-s1-s7` 包含 `relative-s1.json` 至 `relative-s8.json` 八个键；UID 为 `perf-relative-s1` 至 `perf-relative-s8`，标签统一为 `benchmark, relative-time, scenario-N`，四个指标面板均为 `500ms`，没有未替换模板占位符。旧 `scheduling-perf-relative-s8` ConfigMap 已删除。
+- 每个场景都按 `500ms` 步长查询对应历史时间窗。Kueue 和 Volcano 的 Created/Scheduled 均为 `10000/10000`；YuniKorn 非 Gang 场景为 `10000/10000`，Gang 场景因 10,000 个 placeholder Pod 加 10,000 个实际 Pod 为 `20000/20000`，符合 YuniKorn Gang 设计。
+- 八个相对 Dashboard 的 T+0 均取各场景三套方案中首个 Kueue Pod 样本，Volcano/YuniKorn 使用毫秒级 PromQL offset；场景 8 的偏移为 `128500ms` 和 `230000ms`，证明不再回退到整秒计算。
+
+### 20.7 结果制品与审计日志观察
+
+用户已明确图片或原始审计日志保存失败不作为本轮失败条件；本轮实际仍完整保存了全部制品：
+
+- 8 个结果目录均包含 `envs.txt`、`result-window.txt`、3 份审计文件和 8 张 PNG，共 `24` 份审计文件、`64` 张图片。
+- 64 张图片均为 `10000 × 5000`、PNG 签名有效，SHA-256 共 64 个唯一值。每场景图片总大小为 `6,766,916` 至 `8,077,627` 字节，单张为 `470,919` 至 `1,443,972` 字节。
+- 图片内容不作为本轮通过条件；对应历史时间窗的 Prometheus Created/Scheduled 查询已逐场景验证有数据，Grafana 可直接使用第 20.4 节时间查看。
+- 24 份审计文件的末条非 NUL 记录均能由 `jq` 解析，并包含 `kind`、`verb`、`requestURI`、`stage`。
+- 其中 23 份文件的磁盘分配小于表观大小，仍存在已知的截断后稀疏 NUL 空洞；该问题未修复，也不影响 Prometheus/Grafana 指标或本轮通过判定。
+
+### 20.8 测试后恢复验收
+
+T1 完成后 Wrapper 自动执行 `make down` 并返回 `0`，随后人工复核：
+
+- `assert-no-kueue-resources`、`assert-no-volcano-resources`、`assert-no-yunikorn-resources` 全部通过。
+- `.resident-state` 不存在，没有活动的 `make` 或 `test-kueue/test-volcano/test-yunikorn` 进程。
+- `verify-base.sh 1000` 通过：Kubernetes client/server 均为 `v1.34.8`，`1001/1001` Node Ready，审计日志继续写入。
+- `verify-schedulers.sh` 通过：Kueue、Coscheduling、Volcano、YuniKorn 共八个 Deployment 全部为 `1/1 Ready`，资源基线仍是 `500m/8 CPU` 且无内存限制。
+- Audit Exporter 为 `1/1 Ready`；`verify-monitoring.sh` 通过，Prometheus、Grafana、Image Renderer、Operator 和 kube-state-metrics 健康，Prometheus 主容器 restartCount 为 `0`。
+- Grafana Ingress `verify.sh` 通过，服务器回环入口和 `http://104.105.137.213:31005/grafana/d/perf/?theme=light` 均正常。
+
+### 20.9 最终结论
+
+固定空闲副本基线、ConfigMap 内容相同时不操作、Audit Exporter 持续保留最近标签、`500ms` 抓取与查询步长、毫秒级相对 Dashboard 对齐均通过完整 8 场景、24 Case 验证。T0 只暴露并修复了新增时间窗代码中的单一 Make 转义错误；T1 没有再出现该错误，也没有出现旧的 Kueue 高基数清理、resident state、Admission、Prometheus OOM 或 Dashboard 无数据问题。本轮最终判定为通过。
