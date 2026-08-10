@@ -1764,7 +1764,7 @@
         "type": "query"
       },
       {
-        "allValue": ".*",
+        "allValue": "bench-kueue|bench-volcano|bench-yunikorn",
         "allowCustomValue": true,
         "current": {
           "text": [
@@ -1778,7 +1778,7 @@
           "type": "prometheus",
           "uid": "${datasource}"
         },
-        "definition": "label_values(api_requests_total,exported_namespace)",
+        "definition": "label_values(api_requests_total{exported_namespace=~\"bench-(kueue|volcano|yunikorn)\"},exported_namespace)",
         "description": "",
         "includeAll": true,
         "label": "Namespace",
@@ -1787,15 +1787,15 @@
         "options": [],
         "query": {
           "qryType": 1,
-          "query": "label_values(api_requests_total,exported_namespace)",
+          "query": "label_values(api_requests_total{exported_namespace=~\"bench-(kueue|volcano|yunikorn)\"},exported_namespace)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
-        "refresh": 1,
+        "refresh": 2,
         "regex": "",
         "type": "query"
       },
       {
-        "allValue": ".*",
+        "allValue": "kueue|volcano|yunikorn",
         "allowCustomValue": true,
         "current": {
           "text": [
@@ -1812,7 +1812,7 @@
         "definition": "label_values(api_requests_total,cluster)",
         "description": "",
         "includeAll": true,
-        "label": "Cluster",
+        "label": "Scheduler",
         "multi": true,
         "name": "cluster",
         "options": [],

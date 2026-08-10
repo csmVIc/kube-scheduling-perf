@@ -1,4 +1,6 @@
-# 常驻集群源码改造最终方案
+# 常驻集群方案细节
+
+如非必要出现源码，则尽量以口头的方式来描述。
 
 ## 1. 目标
 
@@ -16,7 +18,7 @@ YuniKorn
 保存汇总结果
 ```
 
-## 2. 源码改造前的集群调整
+## 2. 常驻集群基础配置
 
 ### 2.1 将 KWOK Node 缩减为 1000 个
 
@@ -53,7 +55,7 @@ FORMAL_KWOK_NODES=1000
 
 完成后，源码中的 `save-result-images.sh` 不需要切换到其他端口。
 
-## 3. Makefile 改造
+## 3. Makefile 方案细节
 
 ### 3.1 常驻集群参数
 
@@ -88,7 +90,9 @@ MEMORY_PER_NODE = 64Gi
 
 ### 3.3 `up-<scheduler>`
 
-保留现有目标名称，但改为选择本轮被测调度器。
+保留现有目标名称，但改为选择本轮被测调度器。【可以删除这句话了】
+
+【修改：不用原子保留调度前的信息了，调度后，直接恢复一个副本即可；原因：当前每次保留调度器测试前的配置和副本非常没必要，因为我们的集群只会用于测试，所以调度器的配置和副本一直都是不变的，不用保存；所以测试前不保存配置和副本数，那么测试后恢复阶段应该就直接恢复为一个默认一个副本数就可以了。后面我就不标注了，你自己改动】
 
 每轮在任何清理、配置修改或 Deployment 缩放前，原子保存全部调度组件的实际副本数，并记录当前调度器。正式状态保存在仓库 `./.resident-state/`，临时快照写入被忽略的 `./tmp/resident-state-snapshots/` 后再原子提交；两者都不会随结果目录归档，正式状态目录也加入 Git 忽略规则。
 
@@ -302,7 +306,7 @@ make down
 - 保存实验环境参数
 - 只将 `output`、`./logs` 和结果元数据归档到独立 staging 目录，不移动整个 `./tmp`
 
-## 4. Go 测试代码改造
+## 4. Go 测试方案细节
 
 ### 4.1 删除 Node 创建路径
 
@@ -330,7 +334,7 @@ make down
 
 `RestartDeployment` 使用 Pod template annotation 触发真实 rollout，并等待 generation 和 updated/ready/available replicas 全部收敛；原副本数为 0 时直接保持停用状态。
 
-## 5. Kueue 测试资源改造
+## 5. Kueue 测试资源方案细节
 
 - 将测试 API 升级为 `kueue.x-k8s.io/v1beta2`
 - 将 ClusterQueue 的 `cohort` 改为 `cohortName`
@@ -340,7 +344,7 @@ make down
 - Gang 测试的 PodGroup 使用 `bench-kueue`
 - 每轮开始前和结束后清理固定名称资源，继续串行复用相同名称
 
-## 6. Volcano 测试资源改造
+## 6. Volcano 测试资源方案细节
 
 ### 6.1 专用父队列
 
@@ -383,7 +387,7 @@ spec:
 - Queue 是集群级资源，删除无效  namespace
 - 每轮清理 `benchmark-root`、全部 `test-queue-*` 和测试 PriorityClass
 
-## 7. YuniKorn 测试资源改造
+## 7. YuniKorn 测试资源方案细节
 
 - Job 使用 `bench-yunikorn`
 - `yunikorn-configs` 继续写入 `yunikorn` namespace
@@ -391,7 +395,7 @@ spec:
 - Job 保留 application ID、queue、gang scheduling annotations
 - `down-yunikorn` 恢复或删除 `yunikorn-configs`；测试前 Scheduler 为 0 副本时不因配置恢复启动或重启它
 
-## 8. 结果采集改造
+## 8. 结果采集方案细节
 
 ### 8.1 删除 overview 生命周期
 
@@ -417,69 +421,10 @@ spec:
 
 图片使用完整串行实验的绝对 `FROM/TO` 时间窗，不再使用“等待后查询最近 N 秒”。Grafana 13 已验证能用现有 `panel-1` 至 `panel-8` 映射全部 8 个面板，不修改 Panel ID。
 
-## 9. 主要修改文件
+### 8.4 固化八个相对时间 Dashboard
 
-| 文件 | 修改内容 |
-|---|---|
-| `.gitignore` | 忽略异常恢复所需的常驻状态目录 |
-| `Makefile` | 常驻集群生命周期、Kueue 异步清理与 600 秒归零等待、down 恢复、移除 overview 调用、save-result 不再 down |
-| `hack/save-result-images.sh` | 使用 `exported_namespace` Dashboard 和 Grafana 原生 All 变量渲染结果 |
-| `test/utils/option.go` | 删除 Node 创建参数 |
-| `test/utils/utils.go` | WaitDeployment 限定 namespace，RestartDeployment 使用真实 rollout |
-| `test/*/batch_job_test.go` | 删除 AddNodes 调用 |
-| `test/*/provider_test.go` | 删除 AddNodes，适配当前组件配置和命名空间 |
-| `test/kueue/*.yaml` | v1beta2、cohortName、作用域和 namespace |
-| `test/volcano/*.yaml` | benchmark-root、parent、namespace 和层级配置 |
-| `test/yunikorn/*.yaml` | namespace 和当前 YuniKorn 配置 |
+仓库保存一份统一的相对时间 Dashboard 模板。默认完整 `make` 为八个场景依次传入内部场景编号；每个场景的三套调度方案全部成功、结果完成归档后，才根据该场景的实际指标生成并更新对应 Dashboard。直接执行 `serial-test`、单调度器测试、单场景冒烟或结果保存时不会设置该内部编号，因此不会生成或覆盖这些 Dashboard。
 
-## 10. 验收顺序
+每套调度方案在 Audit Exporter 重置完成后记录本轮指标起点，在最终指标确认被 Prometheus 抓取后记录终点。生成阶段在各自时间窗内查找第一个 Pod 创建样本，以 Kueue 为共同 T+0，计算 Volcano 和 YuniKorn 的相对偏移，并据三者对齐后的最晚结束时间设置默认展示范围。
 
-### 10.1 集群调整验收
-
-- `1001/1001` Node Ready
-- 恰好 `1000` 个 KWOK Node
-- Grafana `127.0.0.1:8080/grafana` 可用
-- `perf` Dashboard 和图片渲染接口可用
-- Prometheus、Audit Exporter 正常
-
-### 10.2 单调度器冒烟
-
-每套调度器分别执行：
-
-```text
-1 Queue
-1 Job
-2 Pods
-```
-
-检查任务完成、日志生成和 `down-<scheduler>` 恢复结果。
-
-### 10.3 串行验收
-
-- 按 Kueue、Volcano、YuniKorn 顺序完成
-- 每轮只有目标调度组件运行，非目标 Deployment 和 Pod 均已归零
-- 每个 `reset-auditlog-<scheduler>` 均在 Exporter 停止后清空审计文件，并使用独立调度器标签启动新进程
-- 三份审计日志正确写入 `./logs`
-- `save-result` 使用完整实验 `FROM/TO` 生成包含三组独立指标的图片和归档目录
-- 执行结束后全部调度组件恢复到测试前实际副本数
-- 测试前 YuniKorn Scheduler 为 0 副本时，结束后仍为 0，配置恢复过程不触发额外重启
-- 无测试 Job、Queue、Workload、PodGroup 或 PriorityClass 残留
-- 最终保持 `1001/1001` Node Ready
-- 场景 5 中 Kueue 的 10000 个 PodGroup 能异步删除并在 600 秒内确认归零，随后 Volcano 和 YuniKorn 正常执行
-- 8 张 Grafana 图片均包含实际曲线，不显示 `No data`
-
-### 10.4 人工恢复验收
-
-在任意一套测试执行中途停止后运行：
-
-```bash
-make down
-```
-
-确认配置、副本数、测试资源和集群健康状态全部恢复。
-
-## 11. 当前验证状态
-
-提交 `708f8fafb2ba9b86641d2f3a8201b168561905b0` 已通过场景 5 定向验证：Kueue、Volcano、YuniKorn 三组 `TestBatchJob` 全部通过，Kueue 高基数异步清理、600 秒归零等待、调度器切换、8 张 Grafana 实际曲线和最终集群恢复均通过。结果位于服务器 `/root/github/kube-scheduling-perf/results/1786021307`。
-
-该结果只验收场景 5 的原失败链路；尚未在此提交上重新执行全部 8 个场景，因此不能据此将完整测试结论改为通过。审计日志稀疏 NUL 空洞按当前范围保留为已知限制。
+八个场景统一更新 `scheduling-perf-relative-s1-s7` ConfigMap 中各自的 JSON；该 ConfigMap 名称仅为历史遗留名称，不再表示只包含场景 1 至 7。场景 8 首次按新方案刷新后删除旧的 `scheduling-perf-relative-s8` ConfigMap，避免 Grafana 加载重复 Dashboard。八个 Dashboard 的标签统一为 `benchmark`、`relative-time` 和各自的 `scenario-N`。Dashboard UID 固定为 `perf-relative-s1` 至 `perf-relative-s8`，继续支持 Scheduler 多选和 Grafana 原生时间缩放；原 `perf` Dashboard 不受影响。完整 `make` 全部成功时八个 Dashboard 均刷新为本轮数据，任一场景失败时不会为该失败场景生成配置。

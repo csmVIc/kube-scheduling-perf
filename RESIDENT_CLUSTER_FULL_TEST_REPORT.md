@@ -45,7 +45,7 @@
 
 ## 3. 代码评审和修复结果
 
-- 初版提交后由 `gpt-5.6-sol`、`ultra` 推理强度的独立子 Agent 对照 [RESIDENT_CLUSTER_SOURCE_CHANGE_PLAN.md](./RESIDENT_CLUSTER_SOURCE_CHANGE_PLAN.md) 和原源码完成评审。
+- 初版提交后由 `gpt-5.6-sol`、`ultra` 推理强度的独立子 Agent 对照 [RESIDENT_CLUSTER_PLAN_DETAIL.md](./RESIDENT_CLUSTER_PLAN_DETAIL.md) 和原源码完成评审。
 - 评审问题经判断后完成修复，并提交为 `add6e843ff31ae3c232cfb16c807077cc89245f6`。
 - 修复后再次只读复审，结论为“无剩余阻断问题”。
 - 评审详情见 [RESIDENT_CLUSTER_CODE_REVIEW.md](./RESIDENT_CLUSTER_CODE_REVIEW.md)。
@@ -263,7 +263,7 @@ Kueue Controller 持续 OOM 时，Workload 终结处理无法推进。为完成�
 | Volcano | Scheduler、Controller、Admission client 均为 `1000/1000`；Controller Job/GC/PodGroup worker 均为 `100` |
 | YuniKorn | 无 `GOMEMLIMIT`、`GOGC`；队列与 Admission 隔离配置不变 |
 
-应用后 8 个 Deployment 全部滚动完成；`verify-base.sh 1000`、`verify-schedulers.sh`、`verify-monitoring.sh` 均通过，Node 为 `1001/1001 Ready`。首次完整测试中 Kueue 的 `512Mi` OOM 是常驻部署时未经批准改变旧资源基线造成的结果，现已修复；本次修复不修改 `RESIDENT_CLUSTER_SOURCE_CHANGE_PLAN.md`。
+应用后 8 个 Deployment 全部滚动完成；`verify-base.sh 1000`、`verify-schedulers.sh`、`verify-monitoring.sh` 均通过，Node 为 `1001/1001 Ready`。首次完整测试中 Kueue 的 `512Mi` OOM 是常驻部署时未经批准改变旧资源基线造成的结果，现已修复；本次修复不修改 `RESIDENT_CLUSTER_PLAN_DETAIL.md`。
 
 下一步按执行规划先提交、推送本次纠正，再进行一轮独立配置评审；评审处理后的最终提交同步到服务器后，才执行场景 1 最小测试。
 
@@ -290,7 +290,7 @@ Kueue Controller 持续 OOM 时，Workload 终结处理无法推进。为完成�
 - 首次完整安装脚本复跑暴露 Kueue server-side apply 与 JSON Patch 的字段所有权冲突；增加显式字段接管后，再次从头复跑成功。
 - 基础集群、调度器、监控验证全部通过，Node 为 `1001/1001 Ready`。
 
-这些修订恢复遗漏的旧性能/隔离语义，没有改变已批准的常驻集群源码设计，因此仍不修改 `RESIDENT_CLUSTER_SOURCE_CHANGE_PLAN.md`。
+这些修订恢复遗漏的旧性能/隔离语义，没有改变已批准的常驻集群源码设计，因此仍不修改 `RESIDENT_CLUSTER_PLAN_DETAIL.md`。
 
 ## 13. 基线纠正后的场景 1 最小测试
 
@@ -363,7 +363,7 @@ Kueue Controller 持续 OOM 时，Workload 终结处理无法推进。为完成�
 | YuniKorn Webhook | 作用域验证通过；最近 15 分钟调用失败数为 0 |
 | Monitoring | Audit Exporter、Prometheus、Grafana、Image Renderer 和 Dashboard 全部通过 |
 
-本轮不需要修改 `RESIDENT_CLUSTER_SOURCE_CHANGE_PLAN.md`：配置纠正恢复的是改造前基线，SSH 中断也没有暴露新的源码设计问题。
+本轮不需要修改 `RESIDENT_CLUSTER_PLAN_DETAIL.md`：配置纠正恢复的是改造前基线，SSH 中断也没有暴露新的源码设计问题。
 
 ## 16. 常驻集群第一轮完整测试（失败）
 
@@ -420,7 +420,7 @@ Volcano 指标屏障异常退出，使本轮状态尚未恢复；随后 YuniKorn
 
 - 从 Prometheus 部署 values 中移除整个 resources 配置，恢复旧源码“不设置 CPU/内存 request 或 limit”的行为，避免 `4Gi` cgroup 上限再次终止 Prometheus。
 - 常驻模式新增的 `wait-audit-metrics-scraped` 在 Audit Exporter 或 Prometheus 请求短暂失败、响应暂时不可解析时继续使用原有等待窗口重试；成功条件、稳定样本条件和超时失败语义不变。
-- 不改动既有串行测试结构，不修改 `RESIDENT_CLUSTER_SOURCE_CHANGE_PLAN.md`，也不修改已明确排除的 `/Users/csmvic/Documents/Codex/2026-08-03/k8s-1-35/`。
+- 不改动既有串行测试结构，不修改 `RESIDENT_CLUSTER_PLAN_DETAIL.md`，也不修改已明确排除的 `/Users/csmvic/Documents/Codex/2026-08-03/k8s-1-35/`。
 
 失败后执行 `make down` 返回 `0`；`.resident-state` 已清除，实验资源零残留，`1001/1001` Node、8 个调度组件及全部监控组件恢复健康。修复提交并推送后，只再执行一轮完整测试；无论第二轮成功或失败都不再修复或执行第三轮。
 

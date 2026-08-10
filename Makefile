@@ -35,6 +35,8 @@ GANG ?= false
 PREEMPTION ?= false
 
 SCHEDULERS ?= kueue volcano yunikorn
+RELATIVE_DASHBOARD_SCENARIO ?=
+PROMETHEUS_URL ?= http://127.0.0.1:31003
 
 LIMIT_CPU ?= 8
 
@@ -96,35 +98,43 @@ TEST_ENVS = \
 .PHONY: default
 default: ensure-directories
 	make serial-test \
+		RELATIVE_DASHBOARD_SCENARIO=1 \
 		TEST_TIMEOUT_SECONDS=350 \
 		NODES_SIZE=1000 \
 		QUEUES_SIZE=1  JOBS_SIZE_PER_QUEUE=10000  PODS_SIZE_PER_JOB=1
 	make serial-test \
+		RELATIVE_DASHBOARD_SCENARIO=2 \
 		TEST_TIMEOUT_SECONDS=200 \
 		NODES_SIZE=1000 \
 		QUEUES_SIZE=1  JOBS_SIZE_PER_QUEUE=500    PODS_SIZE_PER_JOB=20
 	make serial-test \
+		RELATIVE_DASHBOARD_SCENARIO=3 \
 		TEST_TIMEOUT_SECONDS=160 \
 		NODES_SIZE=1000 \
 		QUEUES_SIZE=1  JOBS_SIZE_PER_QUEUE=20     PODS_SIZE_PER_JOB=500
 	make serial-test \
+		RELATIVE_DASHBOARD_SCENARIO=4 \
 		TEST_TIMEOUT_SECONDS=190 \
 		NODES_SIZE=1000 \
 		QUEUES_SIZE=1  JOBS_SIZE_PER_QUEUE=1      PODS_SIZE_PER_JOB=10000
 
 	make serial-test \
+		RELATIVE_DASHBOARD_SCENARIO=5 \
 		TEST_TIMEOUT_SECONDS=430 \
 		NODES_SIZE=1000 GANG=true \
 		QUEUES_SIZE=1  JOBS_SIZE_PER_QUEUE=10000  PODS_SIZE_PER_JOB=1
 	make serial-test \
+		RELATIVE_DASHBOARD_SCENARIO=6 \
 		TEST_TIMEOUT_SECONDS=310 \
 		NODES_SIZE=1000 GANG=true \
 		QUEUES_SIZE=1  JOBS_SIZE_PER_QUEUE=500    PODS_SIZE_PER_JOB=20
 	make serial-test \
+		RELATIVE_DASHBOARD_SCENARIO=7 \
 		TEST_TIMEOUT_SECONDS=310 \
 		NODES_SIZE=1000 GANG=true \
 		QUEUES_SIZE=1  JOBS_SIZE_PER_QUEUE=20     PODS_SIZE_PER_JOB=500
 	make serial-test \
+		RELATIVE_DASHBOARD_SCENARIO=8 \
 		TEST_TIMEOUT_SECONDS=400 \
 		NODES_SIZE=1000 GANG=true \
 		QUEUES_SIZE=1  JOBS_SIZE_PER_QUEUE=1      PODS_SIZE_PER_JOB=10000
@@ -144,6 +154,8 @@ prepare-$(1):
 .PHONY: start-$(1)
 start-$(1):
 	make reset-auditlog-$(1)
+	mkdir -p ./tmp
+	date +%s%3N > ./tmp/result-$(1)-from-millis
 	make test-batch-job-$(1)
 
 .PHONY: end-$(1)
@@ -151,7 +163,9 @@ end-$(1):
 	mkdir -p ./logs
 	$(MAKE) wait-audit-metrics-scraped SCHEDULER=$(1)
 	mkdir -p ./tmp
-	date +%s%3N > ./tmp/result-to-millis
+	@timestamp="$$(date +%s%3N)"; \
+	printf '%s\n' "$$timestamp" > ./tmp/result-$(1)-to-millis; \
+	printf '%s\n' "$$timestamp" > ./tmp/result-to-millis
 	cp $(RESIDENT_AUDIT_LOG) ./logs/kube-apiserver-audit.$(1).log
 	$(MAKE) restore-audit-exporter
 	$(MAKE) down-$(1)
@@ -675,6 +689,9 @@ down:
 serial-test: ensure-directories
 	mkdir -p ./tmp
 	rm -f ./tmp/result-to-millis
+	@for sched in $(SCHEDULERS); do \
+		rm -f "./tmp/result-$$sched-from-millis" "./tmp/result-$$sched-to-millis"; \
+	done
 	date +%s%3N > ./tmp/result-from-millis
 	$(foreach sched,$(SCHEDULERS), \
 		$(MAKE) prepare-$(sched); \
@@ -683,6 +700,25 @@ serial-test: ensure-directories
 	)
 
 	$(MAKE) save-result
+	@if test -n "$(RELATIVE_DASHBOARD_SCENARIO)"; then \
+		$(MAKE) update-relative-dashboard SCENARIO="$(RELATIVE_DASHBOARD_SCENARIO)"; \
+	fi
+	@for sched in $(SCHEDULERS); do \
+		rm -f "./tmp/result-$$sched-from-millis" "./tmp/result-$$sched-to-millis"; \
+	done
+
+.PHONY: update-relative-dashboard
+update-relative-dashboard:
+	@test -n "$(SCENARIO)" || (echo 'SCENARIO is required' >&2; exit 1)
+	SCENARIO="$(SCENARIO)" \
+	GANG="$(GANG)" \
+	JOBS_SIZE_PER_QUEUE="$(JOBS_SIZE_PER_QUEUE)" \
+	PODS_SIZE_PER_JOB="$(PODS_SIZE_PER_JOB)" \
+	RESULT_WINDOW_DIR="$(CURDIR)/tmp" \
+	PROMETHEUS_URL="$(PROMETHEUS_URL)" \
+	KUBECTL="$(KUBECTL)" \
+	KUBECONFIG="$(KUBECONFIG)" \
+	./hack/update-relative-dashboard.sh
 
 .PHONY: up-overview
 up-overview:
