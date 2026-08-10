@@ -31,7 +31,7 @@
       },
       "id": 10,
       "options": {
-        "content": "## Scenario __SCENARIO__ — __MODE__, __SHAPE__\nAll three schedulers’ first observed Pod creation samples are aligned to T+0 = __T0_CST__ CST (UTC+8). Volcano is shifted __VOLCANO_OFFSET__s earlier and YuniKorn __YUNIKORN_OFFSET__s earlier; Kueue is the reference. Use **Scheduler** to select one or more schedulers. Drag over a chart to zoom in, and use the Grafana time picker or **Zoom out** to change the visible interval.",
+        "content": "## Scenario __SCENARIO__ — __MODE__, __SHAPE__\nAll three schedulers’ first observed Pod creation samples are aligned to T+0 = __T0_CST__ CST (UTC+8). Volcano is shifted __VOLCANO_OFFSET_SECONDS__s earlier and YuniKorn __YUNIKORN_OFFSET_SECONDS__s earlier; Kueue is the reference. Use **Scheduler** to select one or more schedulers. Drag over a chart to zoom in, and use the Grafana time picker or **Zoom out** to change the visible interval.",
         "mode": "markdown"
       },
       "title": "Scenario __SCENARIO__ alignment",
@@ -189,7 +189,7 @@
         "y": 4
       },
       "id": 1,
-      "interval": "1s",
+      "interval": "500ms",
       "options": {
         "legend": {
           "calcs": [],
@@ -238,7 +238,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(api_requests_total{cluster=~\"$scheduler\", exported_namespace=\"bench-volcano\", resource=\"pods\", verb=\"create\"} offset -__VOLCANO_OFFSET__s)",
+          "expr": "sum(api_requests_total{cluster=~\"$scheduler\", exported_namespace=\"bench-volcano\", resource=\"pods\", verb=\"create\"} offset -__VOLCANO_OFFSET_DURATION__)",
           "instant": false,
           "legendFormat": "Volcano Created",
           "range": true,
@@ -251,7 +251,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(pod_scheduling_latency_seconds_count{cluster=~\"$scheduler\", exported_namespace=\"bench-volcano\"} offset -__VOLCANO_OFFSET__s)",
+          "expr": "sum(pod_scheduling_latency_seconds_count{cluster=~\"$scheduler\", exported_namespace=\"bench-volcano\"} offset -__VOLCANO_OFFSET_DURATION__)",
           "instant": false,
           "legendFormat": "Volcano Scheduled",
           "range": true,
@@ -264,7 +264,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(api_requests_total{cluster=~\"$scheduler\", exported_namespace=\"bench-yunikorn\", resource=\"pods\", verb=\"create\"} offset -__YUNIKORN_OFFSET__s)",
+          "expr": "sum(api_requests_total{cluster=~\"$scheduler\", exported_namespace=\"bench-yunikorn\", resource=\"pods\", verb=\"create\"} offset -__YUNIKORN_OFFSET_DURATION__)",
           "instant": false,
           "legendFormat": "YuniKorn Created",
           "range": true,
@@ -277,7 +277,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(pod_scheduling_latency_seconds_count{cluster=~\"$scheduler\", exported_namespace=\"bench-yunikorn\"} offset -__YUNIKORN_OFFSET__s)",
+          "expr": "sum(pod_scheduling_latency_seconds_count{cluster=~\"$scheduler\", exported_namespace=\"bench-yunikorn\"} offset -__YUNIKORN_OFFSET_DURATION__)",
           "instant": false,
           "legendFormat": "YuniKorn Scheduled",
           "range": true,
@@ -401,7 +401,7 @@
         "y": 20
       },
       "id": 2,
-      "interval": "1s",
+      "interval": "500ms",
       "options": {
         "legend": {
           "calcs": [],
@@ -440,7 +440,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "histogram_quantile(0.99, sum by(le) (rate(pod_scheduling_latency_seconds_bucket{cluster=~\"$scheduler\", exported_namespace=\"bench-volcano\"}[5s] offset -__VOLCANO_OFFSET__s)))",
+          "expr": "histogram_quantile(0.99, sum by(le) (rate(pod_scheduling_latency_seconds_bucket{cluster=~\"$scheduler\", exported_namespace=\"bench-volcano\"}[5s] offset -__VOLCANO_OFFSET_DURATION__)))",
           "instant": false,
           "legendFormat": "Volcano P99",
           "range": true,
@@ -453,7 +453,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "histogram_quantile(0.99, sum by(le) (rate(pod_scheduling_latency_seconds_bucket{cluster=~\"$scheduler\", exported_namespace=\"bench-yunikorn\"}[5s] offset -__YUNIKORN_OFFSET__s)))",
+          "expr": "histogram_quantile(0.99, sum by(le) (rate(pod_scheduling_latency_seconds_bucket{cluster=~\"$scheduler\", exported_namespace=\"bench-yunikorn\"}[5s] offset -__YUNIKORN_OFFSET_DURATION__)))",
           "instant": false,
           "legendFormat": "YuniKorn P99",
           "range": true,
@@ -578,7 +578,7 @@
         "y": 20
       },
       "id": 3,
-      "interval": "1s",
+      "interval": "500ms",
       "options": {
         "legend": {
           "calcs": [],
@@ -617,7 +617,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(batchjob_completion_latency_seconds_count{cluster=~\"$scheduler\", exported_namespace=\"bench-volcano\"} offset -__VOLCANO_OFFSET__s)",
+          "expr": "sum(batchjob_completion_latency_seconds_count{cluster=~\"$scheduler\", exported_namespace=\"bench-volcano\"} offset -__VOLCANO_OFFSET_DURATION__)",
           "instant": false,
           "legendFormat": "Volcano completed",
           "range": true,
@@ -630,7 +630,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(batchjob_completion_latency_seconds_count{cluster=~\"$scheduler\", exported_namespace=\"bench-yunikorn\"} offset -__YUNIKORN_OFFSET__s)",
+          "expr": "sum(batchjob_completion_latency_seconds_count{cluster=~\"$scheduler\", exported_namespace=\"bench-yunikorn\"} offset -__YUNIKORN_OFFSET_DURATION__)",
           "instant": false,
           "legendFormat": "YuniKorn completed",
           "range": true,
@@ -753,7 +753,7 @@
         "y": 33
       },
       "id": 4,
-      "interval": "1s",
+      "interval": "500ms",
       "options": {
         "legend": {
           "calcs": [],
@@ -792,7 +792,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(rate(api_requests_total{cluster=~\"$scheduler\", exported_namespace=\"bench-volcano\"}[5s] offset -__VOLCANO_OFFSET__s))",
+          "expr": "sum(rate(api_requests_total{cluster=~\"$scheduler\", exported_namespace=\"bench-volcano\"}[5s] offset -__VOLCANO_OFFSET_DURATION__))",
           "instant": false,
           "legendFormat": "Volcano",
           "range": true,
@@ -805,7 +805,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(rate(api_requests_total{cluster=~\"$scheduler\", exported_namespace=\"bench-yunikorn\"}[5s] offset -__YUNIKORN_OFFSET__s))",
+          "expr": "sum(rate(api_requests_total{cluster=~\"$scheduler\", exported_namespace=\"bench-yunikorn\"}[5s] offset -__YUNIKORN_OFFSET_DURATION__))",
           "instant": false,
           "legendFormat": "YuniKorn",
           "range": true,
@@ -883,4 +883,3 @@
   "version": 1,
   "weekStart": ""
 }
-

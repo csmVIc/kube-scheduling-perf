@@ -213,7 +213,7 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 - Sharding Controller：关闭
 - Webhook 目标命名空间标签：`benchmark.scheduling/base=volcano`
 - 安装后空闲配置：actions 为 `enqueue, allocate, backfill`；第一层为 `priority/gang/conformance`，第二层为 `overcommit/drf/predicates/proportion/nodeorder/binpack`
-- 测试期间配置：`TestInit` 临时切换为 `enqueue, allocate, backfill, reclaim`；第一层为 `priority/gang`，第二层为 `predicates/capacity`，以支持 `benchmark-root` 层级队列；`make down` 恢复测试前空闲配置
+- 首次测试前为安装空闲配置；`TestInit` 仅在内容变化时将同一 ConfigMap 原地更新为 `enqueue, allocate, backfill, reclaim`，第一层为 `priority/gang`、第二层为 `predicates/capacity`，以支持 `benchmark-root` 层级队列，并仅在更新后重启 Scheduler；实验结束和 `make down` 均保留最近一次测试配置
 - Volcano Job CRD：`jobs.batch.volcano.sh/v1alpha1`，served/storage 均为 true
 - Scheduler、Controller、Admission API client QPS/Burst 均为 `1000/1000`
 - Controller 的 Job、GC、PodGroup worker 均为 `100`
@@ -279,8 +279,8 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 - Mutating Webhook 的 Kubernetes `namespaceSelector` 只匹配 `benchmark.scheduling/base=yunikorn`，进程内部再以 `^bench-yunikorn$` 二次过滤
 - Validating Webhook 只匹配 `kubernetes.io/metadata.name=yunikorn`，用于配置 ConfigMap
 - Admission 绕过 `^(kube-system|yunikorn)$`
-- 空闲时没有 `yunikorn-configs`，使用内置 placement 规则，`bench-yunikorn` 的动态队列为 `root.bench-yunikorn`
-- 测试期间 `TestInit` 临时创建专用 `queues.yaml`，同时设置 `kubernetes.qps=1000`、`kubernetes.burst=1000`；`make down` 恢复测试前空闲状态
+- 首次实验前可以不存在 `yunikorn-configs`；`TestInit` 会创建，后续仅在内容变化时原地更新并重启 Scheduler，内容一致时不操作
+- `TestInit` 写入专用 `queues.yaml` 以及 `kubernetes.qps=1000`、`kubernetes.burst=1000`；实验结束和 `make down` 均不删除或恢复该 ConfigMap
 - Scheduler 和 Admission 均未设置 `GOMEMLIMIT`、`GOGC`，使用与旧基线一致的 Go runtime 默认行为
 
 资源配置：
@@ -298,7 +298,7 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 | `bench-kueue` | `benchmark.scheduling/base=kueue` | Kueue + Coscheduling |
 | `bench-yunikorn` | `benchmark.scheduling/base=yunikorn` | YuniKorn |
 
-空闲基线下三套 Scheduler Deployment 都是 `1` 副本并同时运行。仓库常驻集群流程会在每轮实验前记录所有调度组件的实际副本数，仅保留目标调度组件为 `1` 副本、将其他调度组件缩容为 `0`，等待非目标 Pod 完全退出后再开始测试；Kueue 命名空间资源使用异步删除并在最多 600 秒内确认归零，再删除集群级测试资源；随后使用精确替换恢复可变 ConfigMap，并恢复测试前实际副本数。YuniKorn 清理不主动扩容 Scheduler 或 Admission；测试前 Scheduler 为 `0` 时，配置恢复也不会额外启动或重启它。
+空闲副本基线下三套 Scheduler Deployment 都是 `1` 副本并同时运行。仓库常驻集群流程不再保存测试前状态；每轮仅保留目标调度组件为 `1` 副本、将其他调度组件缩容为 `0`，等待非目标 Pod 完全退出后再开始测试。Kueue 命名空间资源使用异步删除并在最多 600 秒内确认归零，再删除集群级测试资源；Volcano 和 YuniKorn ConfigMap 由 `TestInit` 原地更新并保留。每轮结束以及人工执行 `make down` 时，8 个调度组件都统一收敛到 `1` 副本。
 
 ## 10. 监控与审计
 
@@ -354,11 +354,11 @@ Grafana 启用了匿名 Viewer 和 `/grafana/` 子路径。`perf` Dashboard 由 
 - 镜像：`ghcr.io/wzshiming/kube-apiserver-audit-exporter/kube-apiserver-audit-exporter:v0.0.25`
 - Deployment：`kube-apiserver-audit-exporter`，`1` 副本
 - 从控制面宿主路径只读读取 `/var/log/kubernetes/kube-apiserver-audit.log`
-- ServiceMonitor 抓取间隔和超时均为 `1s`
+- ServiceMonitor 抓取间隔和超时均为 `500ms`
 - 已验证指标包括 `pod_scheduling_latency_seconds` 和 `api_requests_total`
 - Grafana Dashboard：`Scheduling Audit Overview`，UID `scheduling-audit-overview`
 
-源码运行性能实验时，会在截断审计日志前停止 Audit Exporter，并为 Kueue、Volcano、YuniKorn 分别以独立 `cluster` 标签启动全新进程。测试结束后先等待 Exporter 指标稳定，再确认 Prometheus 已抓取到晚于稳定时刻的样本，最后以毫秒时间窗采集结果并恢复 Exporter 测试前参数和副本数。这样常驻部署不依赖 overview 集群，也不会把进程内指标或文件 offset 混入下一轮。
+源码运行性能实验时，会在截断审计日志前停止 Audit Exporter，并为 Kueue、Volcano、YuniKorn 分别以独立 `cluster` 标签启动全新进程。测试结束后先等待 Exporter 指标稳定，再确认 Prometheus 已抓取到晚于稳定时刻的样本，最后以毫秒时间窗采集结果；Exporter 保持本轮标签和 `1` 副本运行，下一轮开始时直接停止、清空日志并切换标签。这样常驻部署不依赖 overview 集群，也不会把进程内指标或文件 offset 混入下一轮。
 
 ### 审计日志稀疏文件风险（已观察）
 

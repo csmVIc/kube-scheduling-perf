@@ -8,9 +8,7 @@ import (
 	"time"
 
 	"github.com/wzshiming/kube-scheduling-perf/test/utils"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/e2e-framework/klient/decoder"
 )
 
@@ -73,29 +71,22 @@ func (p *VolcanoProvider) InitCase(ctx context.Context) error {
 		memoryCapability = memoryPerQueue.String()
 	}
 
-	err = utils.Resources.Delete(ctx, &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "volcano-scheduler-configmap",
-			Namespace: "volcano-system",
-		},
-	})
-	if err != nil {
-		return err
-	}
-
+	configChanged := false
 	err = decoder.DecodeEach(ctx, strings.NewReader(utils.YamlWithArgs(initYaml, map[string]any{
 		"gang":                  p.Gang,
 		"preemption":            p.Preemption,
 		"cpuCapabilityTotal":    cpuCapabilityTotal,
 		"memoryCapabilityTotal": memoryCapabilityTotal,
-	})), decoder.CreateHandler(utils.Resources))
+	})), utils.CreateOrUpdateConfigMapsHandler(utils.Resources, &configChanged))
 	if err != nil {
 		return err
 	}
 
-	err = utils.RestartDeployment(ctx, utils.Resources, "volcano-scheduler", "volcano-system")
-	if err != nil {
-		return err
+	if configChanged {
+		err = utils.RestartDeployment(ctx, utils.Resources, "volcano-scheduler", "volcano-system")
+		if err != nil {
+			return err
+		}
 	}
 
 	for i := range p.QueueSize {

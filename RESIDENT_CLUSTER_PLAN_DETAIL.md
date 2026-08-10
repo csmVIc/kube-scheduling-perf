@@ -90,11 +90,7 @@ MEMORY_PER_NODE = 64Gi
 
 ### 3.3 `up-<scheduler>`
 
-保留现有目标名称，但改为选择本轮被测调度器。【可以删除这句话了】
-
-【修改：不用原子保留调度前的信息了，调度后，直接恢复一个副本即可；原因：当前每次保留调度器测试前的配置和副本非常没必要，因为我们的集群只会用于测试，所以调度器的配置和副本一直都是不变的，不用保存；所以测试前不保存配置和副本数，那么测试后恢复阶段应该就直接恢复为一个默认一个副本数就可以了。后面我就不标注了，你自己改动】
-
-每轮在任何清理、配置修改或 Deployment 缩放前，原子保存全部调度组件的实际副本数，并记录当前调度器。正式状态保存在仓库 `./.resident-state/`，临时快照写入被忽略的 `./tmp/resident-state-snapshots/` 后再原子提交；两者都不会随结果目录归档，正式状态目录也加入 Git 忽略规则。
+每轮不再保存调度组件副本数、当前调度器或 ConfigMap。`up-<scheduler>` 只将本轮目标组件设置为 `1` 副本、其他调度组件设置为 `0` 副本，等待状态收敛并清理对应测试资源；不重复应用任何调度器配置。实验配置统一由后续 `test-init-<scheduler>` 原地更新。
 
 #### `up-kueue`
 
@@ -105,7 +101,6 @@ MEMORY_PER_NODE = 64Gi
 
 #### `up-volcano`
 
-- 原子保存当前 Volcano Scheduler ConfigMap
 - 将 Kueue、Coscheduling 和 YuniKorn 相关 Deployment 缩容到 0
 - 将 Volcano Scheduler、Controller 和 Admission 恢复到 1
 - 等待非目标 Deployment 和 Pod 全部归零、目标组件 Ready
@@ -113,10 +108,8 @@ MEMORY_PER_NODE = 64Gi
 
 #### `up-yunikorn`
 
-- 原子记录测试前是否存在 `yunikorn-configs` 以及原始内容
 - 将 Volcano、Kueue 和 Coscheduling 相关 Deployment 缩容到 0
-- 暂停 YuniKorn 后清理遗留资源和旧测试 ConfigMap
-- 将 YuniKorn Scheduler 和 Admission 恢复到 1
+- 将 YuniKorn Scheduler 和 Admission 设置为 1，清理遗留测试资源但保留 ConfigMap
 - 等待非目标 Deployment 和 Pod 全部归零、目标组件 Ready
 
 ### 3.4 `wait-<scheduler>`
@@ -146,7 +139,7 @@ MEMORY_PER_NODE = 64Gi
 
 继续执行现有 `TestInit`，但统一使用常驻集群 kubeconfig。
 
-`TestInit` 只负责创建或更新本轮实验配置：
+`TestInit` 只负责创建或更新本轮实验配置。Volcano 和 YuniKorn ConfigMap 不存在时创建、内容变化时原地更新并重启对应 Scheduler；内容一致时跳过更新和重启：
 
 - Kueue：ResourceFlavor、WorkloadPriorityClass、ClusterQueue、LocalQueue
 - Volcano：Scheduler ConfigMap、`benchmark-root`、子 Queue、PriorityClass
@@ -167,11 +160,10 @@ MEMORY_PER_NODE = 64Gi
 
 沿用当前源码的处理时机，不在 `make up` 中统一清理日志。每个目标在对应调度器任务开始前：
 
-1. 保存 Audit Exporter 原参数和副本数。
-2. 将 Exporter 缩容到 0 并等待 Pod 完全退出。
-3. 清空常驻集群中的 API Server 审计文件。
-4. 使用本轮调度器名称作为 `--cluster-label`，以全新进程启动 Exporter。
-5. 清空本调度器对应的本地结果文件。
+1. 将 Exporter 缩容到 0 并等待 Pod 完全退出。
+2. 清空常驻集群中的 API Server 审计文件。
+3. 使用本轮调度器名称作为 `--cluster-label`，以全新进程启动 Exporter。
+4. 清空本调度器对应的本地结果文件。
 
 审计文件为：
 
@@ -187,7 +179,7 @@ reset-auditlog-volcano    -> ./logs/kube-apiserver-audit.volcano.log
 reset-auditlog-yunikorn   -> ./logs/kube-apiserver-audit.yunikorn.log
 ```
 
-Exporter 停止后才截断日志，避免旧 offset、进程内 Counter/Histogram 和对象时间状态污染本轮。Kueue、Volcano、YuniKorn 分别生成独立 `cluster` 标签。本地文件仍使用截断清空，不删除整个 `./logs` 目录。清空后再创建本轮 Job。
+Exporter 停止后才截断日志，避免旧 offset、进程内 Counter/Histogram 和对象时间状态污染本轮。Kueue、Volcano、YuniKorn 分别生成独立 `cluster` 标签。本地文件仍使用截断清空，不删除整个 `./logs` 目录。清空后再创建本轮 Job。Exporter 不再保存测试前参数；本轮结束后保持当前参数和 `1` 副本运行，下一轮开始时直接切换标签。
 
 ### 3.8 `test-batch-job-<scheduler>`
 
@@ -206,7 +198,7 @@ Exporter 停止后才截断日志，避免旧 offset、进程内 Counter/Histogr
 1. 等待 Exporter 指标稳定，并确认 Prometheus 中存在晚于稳定时刻的最终抓取样本
 2. 以 epoch 毫秒记录本轮结果时间窗结束时间
 3. 将常驻集群审计日志复制到对应文件
-4. 停止本轮 Exporter并恢复其测试前参数和副本数
+4. 保持本轮 Exporter 以 `1` 副本运行
 5. 调用 `down-<scheduler>`
 
 日志文件固定为：
@@ -225,34 +217,29 @@ Exporter 停止后才截断日志，避免旧 offset、进程内 Counter/Histogr
 - 默认等待最多 `600` 秒，确认上述命名空间资源全部归零
 - 删除测试创建的 ClusterQueue、ResourceFlavor、WorkloadPriorityClass
 - 对命名空间和集群级测试资源执行最终零残留断言
-- 将全部调度相关 Deployment 恢复到测试前记录的实际副本数
-- 按原副本数等待运行组件 Ready 或停用组件归零
+- 将全部调度相关 Deployment 设置为 `1` 副本并等待 Ready
 
 #### `down-volcano`
 
 - 删除 `bench-volcano` 中的 Volcano Job 和 Pod
 - 删除测试创建的子 Queue、`benchmark-root` 和 PriorityClass
-- 使用当前 `resourceVersion` 精确替换为测试前保存的 Volcano Scheduler ConfigMap
-- 将全部调度相关 Deployment 恢复到测试前记录的实际副本数
-- Volcano Scheduler 原副本数为 0 时先等待 Pod 归零再恢复配置；原副本数大于 0 时才重启并等待 Ready
+- 保留 `TestInit` 原地更新后的 Volcano Scheduler ConfigMap
+- 将全部调度相关 Deployment 设置为 `1` 副本并等待 Ready
 
 #### `down-yunikorn`
 
 - 删除 `bench-yunikorn` 中的 Kubernetes Job 和 Pod
-- 如果测试前不存在 `yunikorn-configs`，删除本轮创建的 ConfigMap
-- 如果测试前已经存在，使用当前 `resourceVersion` 精确替换为原始内容
-- 将全部调度相关 Deployment 恢复到测试前记录的实际副本数
-- 清理 YuniKorn Job 和 Pod 不主动扩容 Scheduler 或 Admission
-- YuniKorn Scheduler 原副本数为 0 时先等待 Pod 归零再恢复配置；原副本数大于 0 时才重启并等待 Ready
+- 保留 `TestInit` 原地更新后的 `yunikorn-configs`
+- 将全部调度相关 Deployment 设置为 `1` 副本并等待 Ready
 
 ### 3.11 顶层 `make down`
 
-将顶层 `down` 改为人工恢复入口：
+将顶层 `down` 改为固定副本基线收敛入口：
 
+- 将全部调度组件和 Audit Exporter 设置为 `1` 副本
 - 依次执行三套调度器资源清理
-- 根据 `./.resident-state/` 恢复可变配置、Audit Exporter 和调度组件副本数
-- 有快照时恢复测试前实际副本值；没有快照时不擅自启动测试前已停用的组件
-- 按保存的副本状态等待恢复完成
+- 不恢复或删除调度器 ConfigMap，不修改 Audit Exporter 当前标签
+- 等待全部组件 Ready
 - 阻塞清理并确认三套测试资源全部为零
 - 验证 `1001/1001` Node Ready
 
@@ -378,8 +365,8 @@ spec:
 
 - Capacity Plugin 的 `enableHierarchy` 固定开启
 - Gang 和 Preemption 仍根据本轮实验参数生成
-- 更新 `volcano-scheduler-configmap` 后重启 Scheduler
-- `down-volcano` 恢复测试前保存的 ConfigMap
+- 仅在内容变化时原地更新 `volcano-scheduler-configmap` 并重启 Scheduler；内容一致时不操作
+- `down-volcano` 保留最近一次实验配置
 
 ### 6.3 资源作用域
 
@@ -390,10 +377,10 @@ spec:
 ## 7. YuniKorn 测试资源方案细节
 
 - Job 使用 `bench-yunikorn`
-- `yunikorn-configs` 继续写入 `yunikorn` namespace
-- 每轮写入源码生成的 Queue 配置后，通过真实 rollout 等待 YuniKorn Scheduler 完成配置加载
+- `yunikorn-configs` 继续写入 `yunikorn` namespace，不存在时创建、内容变化时原地更新
+- 仅在 ConfigMap 创建或内容变化后，通过真实 rollout 等待 YuniKorn Scheduler 完成配置加载
 - Job 保留 application ID、queue、gang scheduling annotations
-- `down-yunikorn` 恢复或删除 `yunikorn-configs`；测试前 Scheduler 为 0 副本时不因配置恢复启动或重启它
+- `down-yunikorn` 保留最近一次实验配置
 
 ## 8. 结果采集方案细节
 
@@ -419,12 +406,14 @@ spec:
 
 `save-result-images.sh` 保留 `127.0.0.1:8080/grafana`。Dashboard 全部 8 个面板的查询将实验命名空间标签统一为 `exported_namespace=~"$namespace"`；渲染 URL 的 resource、user、verb 和 namespace 变量使用 Grafana 原生 `$__all`，cluster 仍显式选择 `kueue`、`volcano` 和 `yunikorn`。
 
+Audit Exporter 的 ServiceMonitor 抓取间隔和超时均设为 `500ms`，全部 8 个面板的最小查询步长同步设为 `500ms`。现有 `rate` 计算窗口继续使用 `5s`，避免半秒级抓取下的瞬时速率曲线过度抖动。
+
 图片使用完整串行实验的绝对 `FROM/TO` 时间窗，不再使用“等待后查询最近 N 秒”。Grafana 13 已验证能用现有 `panel-1` 至 `panel-8` 映射全部 8 个面板，不修改 Panel ID。
 
 ### 8.4 固化八个相对时间 Dashboard
 
 仓库保存一份统一的相对时间 Dashboard 模板。默认完整 `make` 为八个场景依次传入内部场景编号；每个场景的三套调度方案全部成功、结果完成归档后，才根据该场景的实际指标生成并更新对应 Dashboard。直接执行 `serial-test`、单调度器测试、单场景冒烟或结果保存时不会设置该内部编号，因此不会生成或覆盖这些 Dashboard。
 
-每套调度方案在 Audit Exporter 重置完成后记录本轮指标起点，在最终指标确认被 Prometheus 抓取后记录终点。生成阶段在各自时间窗内查找第一个 Pod 创建样本，以 Kueue 为共同 T+0，计算 Volcano 和 YuniKorn 的相对偏移，并据三者对齐后的最晚结束时间设置默认展示范围。
+每套调度方案在 Audit Exporter 重置完成后记录本轮指标起点，在最终指标确认被 Prometheus 抓取后记录终点。生成阶段以 `500ms` 查询步长在各自时间窗内查找第一个 Pod 创建样本，以 Kueue 为共同 T+0，按毫秒计算 Volcano 和 YuniKorn 的相对偏移，并据三者对齐后的最晚结束时间设置默认展示范围。四个指标面板的最小查询步长均为 `500ms`。
 
 八个场景统一更新 `scheduling-perf-relative-s1-s7` ConfigMap 中各自的 JSON；该 ConfigMap 名称仅为历史遗留名称，不再表示只包含场景 1 至 7。场景 8 首次按新方案刷新后删除旧的 `scheduling-perf-relative-s8` ConfigMap，避免 Grafana 加载重复 Dashboard。八个 Dashboard 的标签统一为 `benchmark`、`relative-time` 和各自的 `scenario-N`。Dashboard UID 固定为 `perf-relative-s1` 至 `perf-relative-s8`，继续支持 Scheduler 多选和 Grafana 原生时间缩放；原 `perf` Dashboard 不受影响。完整 `make` 全部成功时八个 Dashboard 均刷新为本轮数据，任一场景失败时不会为该失败场景生成配置。

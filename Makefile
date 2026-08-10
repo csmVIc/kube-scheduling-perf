@@ -46,23 +46,11 @@ KUBECTL ?= /root/benchmark-1348-deploy/bin/kubectl
 KUBECTL_CMD = $(KUBECTL) --kubeconfig $(KUBECONFIG)
 RESIDENT_DEPLOY_DIR ?= /root/benchmark-1348-deploy
 RESIDENT_AUDIT_LOG ?= $(RESIDENT_DEPLOY_DIR)/logs/kube-apiserver-audit.log
-RESIDENT_STATE_DIR ?= ./.resident-state
-RESIDENT_STATE_TMP_DIR ?= ./tmp/resident-state-snapshots
 CONTROL_PLANE_CONTAINER ?= $(KIND_CLUSTER_NAME)-control-plane
 AUDIT_EXPORTER_NAMESPACE ?= kube-system
 AUDIT_EXPORTER_DEPLOYMENT ?= kube-apiserver-audit-exporter
 AUDIT_EXPORTER_CONTAINER ?= exporter
 AUDIT_EXPORTER_LOG_PATH ?= /var/log/kubernetes/kube-apiserver-audit.log
-
-SCHEDULER_DEPLOYMENTS = \
-	kueue-system/kueue-controller-manager \
-	coscheduling/coscheduling \
-	coscheduling/scheduler-plugins-controller \
-	volcano-system/volcano-scheduler \
-	volcano-system/volcano-controllers \
-	volcano-system/volcano-admission \
-	yunikorn/yunikorn-scheduler \
-	yunikorn/yunikorn-admission-controller
 
 IMAGE_PREFIX ?= 
 GO_IMAGE ?= $(IMAGE_PREFIX)docker.io/library/golang:1.25
@@ -167,7 +155,6 @@ end-$(1):
 	printf '%s\n' "$$timestamp" > ./tmp/result-$(1)-to-millis; \
 	printf '%s\n' "$$timestamp" > ./tmp/result-to-millis
 	cp $(RESIDENT_AUDIT_LOG) ./logs/kube-apiserver-audit.$(1).log
-	$(MAKE) restore-audit-exporter
 	$(MAKE) down-$(1)
 
 .PHONY: up-$(1)
@@ -203,65 +190,6 @@ endef
 
 $(foreach sched,$(SCHEDULERS),$(eval $(call test-scheduler,$(sched))))
 
-.PHONY: ensure-no-resident-state
-ensure-no-resident-state:
-	mkdir -p $(RESIDENT_STATE_DIR)
-	@test -z "$$(find $(RESIDENT_STATE_DIR) -maxdepth 1 -type f -print -quit)" || \
-		(echo "Resident state exists; run 'make down' before starting another scheduler" >&2; exit 1)
-
-.PHONY: snapshot-scheduler-deployments
-snapshot-scheduler-deployments:
-	@set -eu; \
-		test -n "$(ACTIVE_SCHEDULER)"; \
-		mkdir -p $(RESIDENT_STATE_DIR) $(RESIDENT_STATE_TMP_DIR); \
-		tmp="$$(mktemp '$(RESIDENT_STATE_TMP_DIR)/deployment-replicas.XXXXXX')"; \
-		active_tmp="$$(mktemp '$(RESIDENT_STATE_TMP_DIR)/active-scheduler.XXXXXX')"; \
-		trap 'rm -f "$$tmp" "$$active_tmp"' EXIT; \
-		: > "$$tmp"; \
-		for ref in $(SCHEDULER_DEPLOYMENTS); do \
-			namespace="$${ref%/*}"; name="$${ref#*/}"; \
-			replicas="$$( $(KUBECTL_CMD) get deployment -n "$$namespace" "$$name" -o jsonpath='{.spec.replicas}' )"; \
-			case "$$replicas" in ''|*[!0-9]*) echo "Invalid replicas for $$ref: $$replicas" >&2; exit 1;; esac; \
-			printf '%s %s %s\n' "$$namespace" "$$name" "$$replicas" >> "$$tmp"; \
-		done; \
-		test "$$(wc -l < "$$tmp" | tr -d ' ')" = "8"; \
-		mv "$$tmp" "$(RESIDENT_STATE_DIR)/deployment-replicas"; \
-		printf '%s\n' "$(ACTIVE_SCHEDULER)" > "$$active_tmp"; \
-		mv "$$active_tmp" "$(RESIDENT_STATE_DIR)/active-scheduler"; \
-		trap - EXIT
-
-.PHONY: snapshot-volcano-config
-snapshot-volcano-config:
-	@set -eu; \
-		mkdir -p $(RESIDENT_STATE_TMP_DIR); \
-		tmp="$$(mktemp '$(RESIDENT_STATE_TMP_DIR)/volcano-scheduler-configmap.XXXXXX')"; \
-		trap 'rm -f "$$tmp"' EXIT; \
-		$(KUBECTL_CMD) get configmap -n volcano-system volcano-scheduler-configmap -o json | \
-			jq -e 'select(.kind == "ConfigMap" and .metadata.name == "volcano-scheduler-configmap" and .metadata.namespace == "volcano-system" and (.data | type == "object")) | del(.metadata.creationTimestamp, .metadata.managedFields, .metadata.resourceVersion, .metadata.uid)' > "$$tmp"; \
-		test -s "$$tmp"; \
-		mv "$$tmp" "$(RESIDENT_STATE_DIR)/volcano-scheduler-configmap.json"; \
-		trap - EXIT
-
-.PHONY: snapshot-yunikorn-config
-snapshot-yunikorn-config:
-	@set -eu; \
-		mkdir -p $(RESIDENT_STATE_TMP_DIR); \
-		raw="$$(mktemp '$(RESIDENT_STATE_TMP_DIR)/yunikorn-configs.raw.XXXXXX')"; \
-		json="$$(mktemp '$(RESIDENT_STATE_TMP_DIR)/yunikorn-configs.json.XXXXXX')"; \
-		absent="$$(mktemp '$(RESIDENT_STATE_TMP_DIR)/yunikorn-configs.absent.XXXXXX')"; \
-		trap 'rm -f "$$raw" "$$json" "$$absent"' EXIT; \
-		$(KUBECTL_CMD) get configmap -n yunikorn yunikorn-configs --ignore-not-found -o json > "$$raw"; \
-		if test -s "$$raw"; then \
-			jq -e 'select(.kind == "ConfigMap" and .metadata.name == "yunikorn-configs" and .metadata.namespace == "yunikorn" and (.data | type == "object")) | del(.metadata.creationTimestamp, .metadata.managedFields, .metadata.resourceVersion, .metadata.uid)' "$$raw" > "$$json"; \
-			test -s "$$json"; \
-			mv "$$json" "$(RESIDENT_STATE_DIR)/yunikorn-configs.json"; \
-		else \
-			: > "$$absent"; \
-			mv "$$absent" "$(RESIDENT_STATE_DIR)/yunikorn-configs.absent"; \
-		fi; \
-		rm -f "$$raw"; \
-		trap - EXIT
-
 .PHONY: wait-deployment-replicas
 wait-deployment-replicas:
 	@set -eu; \
@@ -280,26 +208,9 @@ wait-deployment-replicas:
 			if test "$$ready" != true; then echo "Deployment did not converge: $$ref=$$expected" >&2; exit 1; fi; \
 		done
 
-.PHONY: snapshot-audit-exporter
-snapshot-audit-exporter:
-	@if test ! -f $(RESIDENT_STATE_DIR)/audit-exporter.json; then \
-		set -eu; \
-		test -f $(RESIDENT_STATE_DIR)/deployment-replicas; \
-		mkdir -p $(RESIDENT_STATE_TMP_DIR); \
-		tmp="$$(mktemp '$(RESIDENT_STATE_TMP_DIR)/audit-exporter.XXXXXX')"; \
-		trap 'rm -f "$$tmp"' EXIT; \
-		$(KUBECTL_CMD) get deployment -n $(AUDIT_EXPORTER_NAMESPACE) $(AUDIT_EXPORTER_DEPLOYMENT) -o json | \
-			jq -e --arg container "$(AUDIT_EXPORTER_CONTAINER)" \
-			'{replicas: (.spec.replicas // 1), args: ([.spec.template.spec.containers[] | select(.name == $$container) | .args][0])} | select((.replicas | type) == "number" and .replicas >= 0 and (.args | type) == "array")' > "$$tmp"; \
-		test -s "$$tmp"; \
-		mv "$$tmp" $(RESIDENT_STATE_DIR)/audit-exporter.json; \
-		trap - EXIT; \
-	fi
-
 .PHONY: reset-audit-exporter
 reset-audit-exporter:
 	@test -n "$(SCHEDULER)" || (echo 'SCHEDULER is required' >&2; exit 1)
-	$(MAKE) snapshot-audit-exporter
 	$(KUBECTL_CMD) scale deployment -n $(AUDIT_EXPORTER_NAMESPACE) $(AUDIT_EXPORTER_DEPLOYMENT) --replicas=0
 	$(MAKE) wait-deployment-replicas WAIT_DEPLOYMENTS='$(AUDIT_EXPORTER_NAMESPACE)/$(AUDIT_EXPORTER_DEPLOYMENT)=0'
 	docker exec $(CONTROL_PLANE_CONTAINER) sh -c 'true > $(AUDIT_EXPORTER_LOG_PATH)'
@@ -350,22 +261,6 @@ wait-audit-metrics-scraped:
 			fi; \
 		done; \
 		echo 'Timed out waiting for Audit Exporter metrics to reach Prometheus for $(SCHEDULER)' >&2; exit 1
-
-.PHONY: restore-audit-exporter
-restore-audit-exporter:
-	@if test -f $(RESIDENT_STATE_DIR)/audit-exporter.json && test ! -f $(RESIDENT_STATE_DIR)/audit-exporter.restored; then \
-		set -eu; \
-		jq -e 'select((.replicas | type) == "number" and .replicas >= 0 and (.args | type) == "array")' $(RESIDENT_STATE_DIR)/audit-exporter.json >/dev/null; \
-		replicas="$$(jq -r '.replicas' $(RESIDENT_STATE_DIR)/audit-exporter.json)"; \
-		$(KUBECTL_CMD) scale deployment -n $(AUDIT_EXPORTER_NAMESPACE) $(AUDIT_EXPORTER_DEPLOYMENT) --replicas=0; \
-		$(MAKE) wait-deployment-replicas WAIT_DEPLOYMENTS='$(AUDIT_EXPORTER_NAMESPACE)/$(AUDIT_EXPORTER_DEPLOYMENT)=0'; \
-		patch="$$(jq -c --arg container '$(AUDIT_EXPORTER_CONTAINER)' '{spec:{template:{spec:{containers:[{name:$$container,args:.args}]}}}}' $(RESIDENT_STATE_DIR)/audit-exporter.json)"; \
-		$(KUBECTL_CMD) patch deployment -n $(AUDIT_EXPORTER_NAMESPACE) $(AUDIT_EXPORTER_DEPLOYMENT) --type=strategic -p "$$patch"; \
-		$(KUBECTL_CMD) scale deployment -n $(AUDIT_EXPORTER_NAMESPACE) $(AUDIT_EXPORTER_DEPLOYMENT) --replicas="$$replicas"; \
-		$(MAKE) wait-deployment-replicas WAIT_DEPLOYMENTS="$(AUDIT_EXPORTER_NAMESPACE)/$(AUDIT_EXPORTER_DEPLOYMENT)=$$replicas"; \
-		: > $(RESIDENT_STATE_DIR)/.audit-exporter.restored.tmp; \
-		mv $(RESIDENT_STATE_DIR)/.audit-exporter.restored.tmp $(RESIDENT_STATE_DIR)/audit-exporter.restored; \
-	fi
 
 .PHONY: cleanup-kueue-resources
 cleanup-kueue-resources:
@@ -456,123 +351,20 @@ assert-no-yunikorn-resources:
 		done; \
 		printf 'Residual YuniKorn resources:\n%s\n' "$$residual" >&2; exit 1
 
-.PHONY: prepare-active-scheduler-for-cleanup
-prepare-active-scheduler-for-cleanup:
-	@if test -f $(RESIDENT_STATE_DIR)/active-scheduler; then \
-		set -eu; scheduler="$$(cat $(RESIDENT_STATE_DIR)/active-scheduler)"; \
-		case "$$scheduler" in \
-			kueue) \
-				$(KUBECTL_CMD) scale deployment -n kueue-system kueue-controller-manager --replicas=1; \
-				$(KUBECTL_CMD) scale deployment -n coscheduling coscheduling scheduler-plugins-controller --replicas=1; \
-				$(MAKE) wait-deployment-replicas WAIT_DEPLOYMENTS='kueue-system/kueue-controller-manager=1 coscheduling/coscheduling=1 coscheduling/scheduler-plugins-controller=1';; \
-			volcano) \
-				$(KUBECTL_CMD) scale deployment -n volcano-system volcano-scheduler volcano-controllers volcano-admission --replicas=1; \
-				$(MAKE) wait-deployment-replicas WAIT_DEPLOYMENTS='volcano-system/volcano-scheduler=1 volcano-system/volcano-controllers=1 volcano-system/volcano-admission=1';; \
-			yunikorn) :;; \
-			*) echo "Invalid active scheduler: $$scheduler" >&2; exit 1;; \
-		esac; \
-	fi
+.PHONY: enable-all-schedulers
+enable-all-schedulers:
+	$(KUBECTL_CMD) scale deployment -n kueue-system kueue-controller-manager --replicas=1
+	$(KUBECTL_CMD) scale deployment -n coscheduling coscheduling scheduler-plugins-controller --replicas=1
+	$(KUBECTL_CMD) scale deployment -n volcano-system volcano-scheduler volcano-controllers volcano-admission --replicas=1
+	$(KUBECTL_CMD) scale deployment -n yunikorn yunikorn-scheduler yunikorn-admission-controller --replicas=1
 
-.PHONY: restore-scheduler-deployments
-restore-scheduler-deployments:
-	@if test -f $(RESIDENT_STATE_DIR)/deployment-replicas; then \
-		set -eu; \
-		while read -r namespace name replicas; do \
-			case "$$replicas" in ''|*[!0-9]*) echo "Invalid saved replicas: $$namespace/$$name=$$replicas" >&2; exit 1;; esac; \
-			$(KUBECTL_CMD) scale deployment -n "$$namespace" "$$name" --replicas="$$replicas"; \
-		done < $(RESIDENT_STATE_DIR)/deployment-replicas; \
-	fi
-
-.PHONY: restore-volcano-config
-restore-volcano-config:
-	@if [ -f $(RESIDENT_STATE_DIR)/volcano-scheduler-configmap.json ]; then \
-		set -eu; \
-		test -f $(RESIDENT_STATE_DIR)/deployment-replicas; \
-		replicas="$$(awk '$$1 == "volcano-system" && $$2 == "volcano-scheduler" { print $$3 }' $(RESIDENT_STATE_DIR)/deployment-replicas)"; \
-		test -n "$$replicas"; \
-		if test "$$replicas" = 0; then $(MAKE) wait-deployment-replicas WAIT_DEPLOYMENTS='volcano-system/volcano-scheduler=0'; fi; \
-		jq -e 'select(.kind == "ConfigMap" and .metadata.name == "volcano-scheduler-configmap" and .metadata.namespace == "volcano-system" and (.data | type == "object"))' $(RESIDENT_STATE_DIR)/volcano-scheduler-configmap.json >/dev/null; \
-		mkdir -p $(RESIDENT_STATE_TMP_DIR); \
-		current="$$(mktemp '$(RESIDENT_STATE_TMP_DIR)/restore-volcano-current.XXXXXX')"; \
-		restored="$$(mktemp '$(RESIDENT_STATE_TMP_DIR)/restore-volcano-object.XXXXXX')"; \
-		trap 'rm -f "$$current" "$$restored"' EXIT; \
-		$(KUBECTL_CMD) get configmap -n volcano-system volcano-scheduler-configmap --ignore-not-found -o json > "$$current"; \
-		if test -s "$$current"; then \
-			rv="$$(jq -er 'select(.kind == "ConfigMap" and .metadata.name == "volcano-scheduler-configmap" and .metadata.namespace == "volcano-system") | .metadata.resourceVersion' "$$current")"; \
-			jq --arg rv "$$rv" '.metadata.resourceVersion = $$rv' $(RESIDENT_STATE_DIR)/volcano-scheduler-configmap.json > "$$restored"; \
-			$(KUBECTL_CMD) replace -f "$$restored"; \
-		else \
-			$(KUBECTL_CMD) create -f $(RESIDENT_STATE_DIR)/volcano-scheduler-configmap.json; \
-		fi; \
-		if test "$$replicas" -gt 0; then $(KUBECTL_CMD) rollout restart deployment -n volcano-system volcano-scheduler; fi; \
-		rm -f "$$current" "$$restored"; trap - EXIT; \
-	fi
-
-.PHONY: restore-yunikorn-config
-restore-yunikorn-config:
-	@if [ -f $(RESIDENT_STATE_DIR)/yunikorn-configs.json ]; then \
-		set -eu; \
-		test -f $(RESIDENT_STATE_DIR)/deployment-replicas; \
-		replicas="$$(awk '$$1 == "yunikorn" && $$2 == "yunikorn-scheduler" { print $$3 }' $(RESIDENT_STATE_DIR)/deployment-replicas)"; \
-		test -n "$$replicas"; \
-		if test "$$replicas" = 0; then $(MAKE) wait-deployment-replicas WAIT_DEPLOYMENTS='yunikorn/yunikorn-scheduler=0'; fi; \
-		jq -e 'select(.kind == "ConfigMap" and .metadata.name == "yunikorn-configs" and .metadata.namespace == "yunikorn" and (.data | type == "object"))' $(RESIDENT_STATE_DIR)/yunikorn-configs.json >/dev/null; \
-		mkdir -p $(RESIDENT_STATE_TMP_DIR); \
-		current="$$(mktemp '$(RESIDENT_STATE_TMP_DIR)/restore-yunikorn-current.XXXXXX')"; \
-		restored="$$(mktemp '$(RESIDENT_STATE_TMP_DIR)/restore-yunikorn-object.XXXXXX')"; \
-		trap 'rm -f "$$current" "$$restored"' EXIT; \
-		$(KUBECTL_CMD) get configmap -n yunikorn yunikorn-configs --ignore-not-found -o json > "$$current"; \
-		if test -s "$$current"; then \
-			rv="$$(jq -er 'select(.kind == "ConfigMap" and .metadata.name == "yunikorn-configs" and .metadata.namespace == "yunikorn") | .metadata.resourceVersion' "$$current")"; \
-			jq --arg rv "$$rv" '.metadata.resourceVersion = $$rv' $(RESIDENT_STATE_DIR)/yunikorn-configs.json > "$$restored"; \
-			$(KUBECTL_CMD) replace -f "$$restored"; \
-		else \
-			$(KUBECTL_CMD) create -f $(RESIDENT_STATE_DIR)/yunikorn-configs.json; \
-		fi; \
-		if test "$$replicas" -gt 0; then $(KUBECTL_CMD) rollout restart deployment -n yunikorn yunikorn-scheduler; fi; \
-		rm -f "$$current" "$$restored"; trap - EXIT; \
-	elif [ -f $(RESIDENT_STATE_DIR)/yunikorn-configs.absent ]; then \
-		set -eu; \
-		test -f $(RESIDENT_STATE_DIR)/deployment-replicas; \
-		replicas="$$(awk '$$1 == "yunikorn" && $$2 == "yunikorn-scheduler" { print $$3 }' $(RESIDENT_STATE_DIR)/deployment-replicas)"; \
-		test -n "$$replicas"; \
-		if test "$$replicas" = 0; then $(MAKE) wait-deployment-replicas WAIT_DEPLOYMENTS='yunikorn/yunikorn-scheduler=0'; fi; \
-		$(KUBECTL_CMD) delete configmap -n yunikorn yunikorn-configs --ignore-not-found; \
-		if test "$$replicas" -gt 0; then $(KUBECTL_CMD) rollout restart deployment -n yunikorn yunikorn-scheduler; fi; \
-	fi
-
-.PHONY: wait-restored-scheduler-deployments
-wait-restored-scheduler-deployments:
-	@if test -f $(RESIDENT_STATE_DIR)/deployment-replicas; then \
-		set -eu; \
-		while read -r namespace name replicas; do \
-			$(MAKE) wait-deployment-replicas WAIT_DEPLOYMENTS="$$namespace/$$name=$$replicas"; \
-		done < $(RESIDENT_STATE_DIR)/deployment-replicas; \
-	fi
-
-.PHONY: clear-resident-state
-clear-resident-state:
-	@if test -d $(RESIDENT_STATE_DIR); then \
-		rm -f \
-			$(RESIDENT_STATE_DIR)/deployment-replicas \
-			$(RESIDENT_STATE_DIR)/active-scheduler \
-			$(RESIDENT_STATE_DIR)/volcano-scheduler-configmap.json \
-			$(RESIDENT_STATE_DIR)/yunikorn-configs.json \
-			$(RESIDENT_STATE_DIR)/yunikorn-configs.absent \
-			$(RESIDENT_STATE_DIR)/audit-exporter.json \
-			$(RESIDENT_STATE_DIR)/audit-exporter.restored \
-			$(RESIDENT_STATE_DIR)/.*.tmp; \
-		rmdir $(RESIDENT_STATE_DIR) 2>/dev/null || true; \
-	fi
-	@if test -d $(RESIDENT_STATE_TMP_DIR); then \
-		rm -f $(RESIDENT_STATE_TMP_DIR)/*; \
-		rmdir $(RESIDENT_STATE_TMP_DIR) 2>/dev/null || true; \
-	fi
+.PHONY: ensure-audit-exporter-running
+ensure-audit-exporter-running:
+	$(KUBECTL_CMD) scale deployment -n $(AUDIT_EXPORTER_NAMESPACE) $(AUDIT_EXPORTER_DEPLOYMENT) --replicas=1
+	$(MAKE) wait-deployment-replicas WAIT_DEPLOYMENTS='$(AUDIT_EXPORTER_NAMESPACE)/$(AUDIT_EXPORTER_DEPLOYMENT)=1'
 
 .PHONY: activate-kueue
 activate-kueue:
-	$(MAKE) ensure-no-resident-state
-	$(MAKE) snapshot-scheduler-deployments ACTIVE_SCHEDULER=kueue
 	$(KUBECTL_CMD) scale deployment -n volcano-system volcano-scheduler volcano-controllers volcano-admission --replicas=0
 	$(KUBECTL_CMD) scale deployment -n yunikorn yunikorn-scheduler yunikorn-admission-controller --replicas=0
 	$(KUBECTL_CMD) scale deployment -n kueue-system kueue-controller-manager --replicas=1
@@ -582,9 +374,6 @@ activate-kueue:
 
 .PHONY: activate-volcano
 activate-volcano:
-	$(MAKE) ensure-no-resident-state
-	$(MAKE) snapshot-scheduler-deployments ACTIVE_SCHEDULER=volcano
-	$(MAKE) snapshot-volcano-config
 	$(KUBECTL_CMD) scale deployment -n kueue-system kueue-controller-manager --replicas=0
 	$(KUBECTL_CMD) scale deployment -n coscheduling coscheduling scheduler-plugins-controller --replicas=0
 	$(KUBECTL_CMD) scale deployment -n yunikorn yunikorn-scheduler yunikorn-admission-controller --replicas=0
@@ -594,50 +383,30 @@ activate-volcano:
 
 .PHONY: activate-yunikorn
 activate-yunikorn:
-	$(MAKE) ensure-no-resident-state
-	$(MAKE) snapshot-scheduler-deployments ACTIVE_SCHEDULER=yunikorn
-	$(MAKE) snapshot-yunikorn-config
 	$(KUBECTL_CMD) scale deployment -n volcano-system volcano-scheduler volcano-controllers volcano-admission --replicas=0
 	$(KUBECTL_CMD) scale deployment -n kueue-system kueue-controller-manager --replicas=0
 	$(KUBECTL_CMD) scale deployment -n coscheduling coscheduling scheduler-plugins-controller --replicas=0
-	$(KUBECTL_CMD) scale deployment -n yunikorn yunikorn-scheduler yunikorn-admission-controller --replicas=0
-	$(MAKE) wait-deployment-replicas WAIT_DEPLOYMENTS='kueue-system/kueue-controller-manager=0 coscheduling/coscheduling=0 coscheduling/scheduler-plugins-controller=0 volcano-system/volcano-scheduler=0 volcano-system/volcano-controllers=0 volcano-system/volcano-admission=0 yunikorn/yunikorn-scheduler=0 yunikorn/yunikorn-admission-controller=0'
-	$(MAKE) cleanup-yunikorn-resources
-	$(KUBECTL_CMD) delete configmap -n yunikorn yunikorn-configs --ignore-not-found --timeout=2m
 	$(KUBECTL_CMD) scale deployment -n yunikorn yunikorn-scheduler yunikorn-admission-controller --replicas=1
-	$(MAKE) wait-deployment-replicas WAIT_DEPLOYMENTS='yunikorn/yunikorn-scheduler=1 yunikorn/yunikorn-admission-controller=1'
+	$(MAKE) wait-deployment-replicas WAIT_DEPLOYMENTS='kueue-system/kueue-controller-manager=0 coscheduling/coscheduling=0 coscheduling/scheduler-plugins-controller=0 volcano-system/volcano-scheduler=0 volcano-system/volcano-controllers=0 volcano-system/volcano-admission=0 yunikorn/yunikorn-scheduler=1 yunikorn/yunikorn-admission-controller=1'
+	$(MAKE) cleanup-yunikorn-resources
 
 .PHONY: deactivate-kueue
 deactivate-kueue:
-	$(MAKE) prepare-active-scheduler-for-cleanup
 	$(MAKE) cleanup-kueue-resources
-	$(MAKE) restore-audit-exporter
-	$(MAKE) restore-scheduler-deployments
-	$(MAKE) wait-restored-scheduler-deployments
-	cd $(RESIDENT_DEPLOY_DIR) && ./scripts/verify-base.sh 1000
-	$(MAKE) clear-resident-state
+	$(MAKE) enable-all-schedulers
+	$(MAKE) wait-all-schedulers
 
 .PHONY: deactivate-volcano
 deactivate-volcano:
-	$(MAKE) prepare-active-scheduler-for-cleanup
 	$(MAKE) cleanup-volcano-resources
-	$(MAKE) restore-audit-exporter
-	$(MAKE) restore-scheduler-deployments
-	$(MAKE) restore-volcano-config
-	$(MAKE) wait-restored-scheduler-deployments
-	cd $(RESIDENT_DEPLOY_DIR) && ./scripts/verify-base.sh 1000
-	$(MAKE) clear-resident-state
+	$(MAKE) enable-all-schedulers
+	$(MAKE) wait-all-schedulers
 
 .PHONY: deactivate-yunikorn
 deactivate-yunikorn:
-	$(MAKE) prepare-active-scheduler-for-cleanup
 	$(MAKE) cleanup-yunikorn-resources
-	$(MAKE) restore-audit-exporter
-	$(MAKE) restore-scheduler-deployments
-	$(MAKE) restore-yunikorn-config
-	$(MAKE) wait-restored-scheduler-deployments
-	cd $(RESIDENT_DEPLOY_DIR) && ./scripts/verify-base.sh 1000
-	$(MAKE) clear-resident-state
+	$(MAKE) enable-all-schedulers
+	$(MAKE) wait-all-schedulers
 
 .PHONY: wait-resident-kueue
 wait-resident-kueue:
@@ -656,7 +425,7 @@ wait-resident-yunikorn:
 
 .PHONY: wait-all-schedulers
 wait-all-schedulers:
-	$(MAKE) wait-restored-scheduler-deployments
+	$(MAKE) wait-deployment-replicas WAIT_DEPLOYMENTS='kueue-system/kueue-controller-manager=1 coscheduling/coscheduling=1 coscheduling/scheduler-plugins-controller=1 volcano-system/volcano-scheduler=1 volcano-system/volcano-controllers=1 volcano-system/volcano-admission=1 yunikorn/yunikorn-scheduler=1 yunikorn/yunikorn-admission-controller=1 $(AUDIT_EXPORTER_NAMESPACE)/$(AUDIT_EXPORTER_DEPLOYMENT)=1'
 	cd $(RESIDENT_DEPLOY_DIR) && ./scripts/verify-base.sh 1000
 
 bin/kind:
@@ -673,17 +442,13 @@ up: ensure-directories
 
 .PHONY: down
 down:
-	$(MAKE) prepare-active-scheduler-for-cleanup
+	$(MAKE) enable-all-schedulers
+	$(MAKE) ensure-audit-exporter-running
+	$(MAKE) wait-all-schedulers
 	$(MAKE) cleanup-kueue-resources
 	$(MAKE) cleanup-volcano-resources
 	$(MAKE) cleanup-yunikorn-resources
-	$(MAKE) restore-audit-exporter
-	$(MAKE) restore-scheduler-deployments
-	$(MAKE) restore-volcano-config
-	$(MAKE) restore-yunikorn-config
-	$(MAKE) wait-restored-scheduler-deployments
-	cd $(RESIDENT_DEPLOY_DIR) && ./scripts/verify-base.sh 1000
-	$(MAKE) clear-resident-state
+	$(MAKE) wait-all-schedulers
 
 .PHONY: serial-test
 serial-test: ensure-directories

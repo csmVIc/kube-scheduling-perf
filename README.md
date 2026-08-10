@@ -49,11 +49,11 @@ make up
 # Run all eight benchmark scenarios against all three scheduler stacks.
 make
 
-# Recover from an interrupted run and restore the pre-test scheduler state.
+# Recover from an interrupted run and converge to the resident replica baseline.
 make down
 ```
 
-`make up` only validates the existing cluster, schedulers, and monitoring stack. `make down` removes benchmark resources and restores saved configuration and Deployment replica counts; it does not delete the cluster or archived results.
+`make up` only validates the existing cluster, schedulers, and monitoring stack. `make down` removes benchmark resources and converges all scheduler components and the Audit Exporter to one replica; it does not delete the cluster, rewrite scheduler ConfigMaps, or remove archived results.
 
 ### Step-by-Step
 
@@ -77,7 +77,7 @@ make serial-test \
   TEST_TIMEOUT_SECONDS=200
 ```
 
-Each `serial-test` run executes Kueue, Volcano, and YuniKorn in that order. Before every scheduler test, the framework snapshots all eight scheduler Deployment replica counts, runs only the target stack, resets the Audit Exporter, and restores the original cluster state after the test.
+Each `serial-test` run executes Kueue, Volcano, and YuniKorn in that order. Before every scheduler test, the framework runs only the target stack and resets the Audit Exporter with the target scheduler label. `TestInit` creates or updates the Volcano and YuniKorn ConfigMaps only when their content differs and restarts the corresponding scheduler only after such a change. After each test all eight scheduler components return to one replica, while the latest experiment configuration and Audit Exporter label remain in place.
 
 For Kueue, `GANG=false` uses the default Kubernetes scheduler and `GANG=true` uses Coscheduling. Volcano and YuniKorn use their native schedulers in both modes.
 
@@ -136,7 +136,7 @@ For a local-only view, use the `forward-grafana-local` Codex Skill. It forwards 
 make down
 ```
 
-Use this when a scheduler run is interrupted after resident state has been saved. The target cleans benchmark resources, restores the Audit Exporter, restores scheduler configuration and replica counts, verifies the base cluster, and removes `.resident-state/`.
+Use this when a scheduler run is interrupted. The target enables all scheduler components and the Audit Exporter at one replica, cleans all benchmark resources, waits for the fixed replica baseline, and verifies the base cluster. It does not require saved resident state.
 
 ## Benchmark Parameters
 
@@ -202,7 +202,3 @@ echo fs.inotify.max_user_watches=655360 | sudo tee -a /etc/sysctl.conf
 echo fs.inotify.max_user_instances=1280 | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 ```
-
-### Resident State Already Exists
-
-If a new run stops with `Resident state exists`, do not delete `.resident-state/` manually. Run `make down` so the saved scheduler state is restored safely.

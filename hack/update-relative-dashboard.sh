@@ -55,7 +55,7 @@ first_pod_millis() {
     --data-urlencode "query=${query}" \
     --data-urlencode "start=${from_seconds}" \
     --data-urlencode "end=${to_seconds}" \
-    --data-urlencode 'step=1s' \
+    --data-urlencode 'step=500ms' \
     "${PROMETHEUS_URL%/}/api/v1/query_range")"
 
   first_seconds="$(printf '%s' "${response}" | jq -er --argjson lower "${from_seconds}" '
@@ -79,6 +79,16 @@ max_millis() {
   printf '%s\n' "${maximum}"
 }
 
+format_iso_millis() {
+  local value="$1"
+  local seconds=$((value / 1000))
+  local millis=$((value % 1000))
+  local base
+
+  base="$(jq -nr --argjson seconds "${seconds}" '$seconds | todateiso8601 | sub("Z$"; "")')"
+  printf '%s.%03dZ\n' "${base}" "${millis}"
+}
+
 kueue_from="$(read_window_millis kueue from)"
 kueue_to="$(read_window_millis kueue to)"
 volcano_from="$(read_window_millis volcano from)"
@@ -97,25 +107,30 @@ yunikorn_first="$(first_pod_millis yunikorn bench-yunikorn "${yunikorn_from}" "$
 ((kueue_first <= volcano_first))
 ((volcano_first <= yunikorn_first))
 
-volcano_offset=$(((volcano_first - kueue_first + 500) / 1000))
-yunikorn_offset=$(((yunikorn_first - kueue_first + 500) / 1000))
+volcano_offset_millis=$((volcano_first - kueue_first))
+yunikorn_offset_millis=$((yunikorn_first - kueue_first))
+volcano_offset_seconds="$(awk -v value="${volcano_offset_millis}" 'BEGIN {printf "%.3f", value / 1000}')"
+yunikorn_offset_seconds="$(awk -v value="${yunikorn_offset_millis}" 'BEGIN {printf "%.3f", value / 1000}')"
+volcano_offset_duration="${volcano_offset_millis}ms"
+yunikorn_offset_duration="${yunikorn_offset_millis}ms"
 
 aligned_kueue_to="${kueue_to}"
-aligned_volcano_to=$((volcano_to - volcano_offset * 1000))
-aligned_yunikorn_to=$((yunikorn_to - yunikorn_offset * 1000))
+aligned_volcano_to=$((volcano_to - volcano_offset_millis))
+aligned_yunikorn_to=$((yunikorn_to - yunikorn_offset_millis))
 dashboard_to_millis="$(max_millis "${aligned_kueue_to}" "${aligned_volcano_to}" "${aligned_yunikorn_to}")"
 dashboard_to_millis=$((dashboard_to_millis + 15000))
 if ((dashboard_to_millis <= kueue_first)); then
   dashboard_to_millis=$((kueue_first + 60000))
 fi
 
-from_iso="$(jq -nr --argjson millis "${kueue_first}" '$millis / 1000 | todateiso8601')"
-to_iso="$(jq -nr --argjson millis "${dashboard_to_millis}" '$millis / 1000 | todateiso8601')"
-if t0_cst="$(TZ=Asia/Shanghai date -d "@$((kueue_first / 1000))" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"; then
+from_iso="$(format_iso_millis "${kueue_first}")"
+to_iso="$(format_iso_millis "${dashboard_to_millis}")"
+if t0_cst_base="$(TZ=Asia/Shanghai date -d "@$((kueue_first / 1000))" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"; then
   :
 else
-  t0_cst="$(TZ=Asia/Shanghai date -r "$((kueue_first / 1000))" '+%Y-%m-%d %H:%M:%S')"
+  t0_cst_base="$(TZ=Asia/Shanghai date -r "$((kueue_first / 1000))" '+%Y-%m-%d %H:%M:%S')"
 fi
+printf -v t0_cst '%s.%03d' "${t0_cst_base}" "$((kueue_first % 1000))"
 
 if [[ "${GANG}" == "true" ]]; then
   mode="Gang"
@@ -147,8 +162,10 @@ jq \
   --arg from_iso "${from_iso}" \
   --arg to_iso "${to_iso}" \
   --arg t0_cst "${t0_cst}" \
-  --arg volcano_offset "${volcano_offset}" \
-  --arg yunikorn_offset "${yunikorn_offset}" '
+  --arg volcano_offset_seconds "${volcano_offset_seconds}" \
+  --arg yunikorn_offset_seconds "${yunikorn_offset_seconds}" \
+  --arg volcano_offset_duration "${volcano_offset_duration}" \
+  --arg yunikorn_offset_duration "${yunikorn_offset_duration}" '
   walk(
     if type == "string" then
       gsub("__SCENARIO__"; $scenario)
@@ -157,8 +174,10 @@ jq \
       | gsub("__FROM_ISO__"; $from_iso)
       | gsub("__TO_ISO__"; $to_iso)
       | gsub("__T0_CST__"; $t0_cst)
-      | gsub("__VOLCANO_OFFSET__"; $volcano_offset)
-      | gsub("__YUNIKORN_OFFSET__"; $yunikorn_offset)
+      | gsub("__VOLCANO_OFFSET_SECONDS__"; $volcano_offset_seconds)
+      | gsub("__YUNIKORN_OFFSET_SECONDS__"; $yunikorn_offset_seconds)
+      | gsub("__VOLCANO_OFFSET_DURATION__"; $volcano_offset_duration)
+      | gsub("__YUNIKORN_OFFSET_DURATION__"; $yunikorn_offset_duration)
     else . end
   )
 ' "${TEMPLATE}" >"${dashboard}"
@@ -204,5 +223,5 @@ if ((SCENARIO == 8)); then
     --ignore-not-found --wait=false >/dev/null
 fi
 
-printf 'relative_dashboard_updated scenario=%s t0=%s volcano_offset=%ss yunikorn_offset=%ss configmap=%s\n' \
-  "${SCENARIO}" "${t0_cst}" "${volcano_offset}" "${yunikorn_offset}" "${configmap}"
+printf 'relative_dashboard_updated scenario=%s t0=%s volcano_offset=%s yunikorn_offset=%s configmap=%s\n' \
+  "${SCENARIO}" "${t0_cst}" "${volcano_offset_duration}" "${yunikorn_offset_duration}" "${configmap}"

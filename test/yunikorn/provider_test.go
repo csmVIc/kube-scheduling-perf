@@ -58,6 +58,7 @@ func (p *YunikornProvider) InitCase(ctx context.Context) error {
 		memoryGuaranteed = tmp.String()
 	}
 
+	configChanged := false
 	err := decoder.DecodeEach(ctx, strings.NewReader(utils.YamlWithArgs(initQueueYaml, map[string]any{
 		"queueSize":          make([]byte, p.QueueSize),
 		"impactingQueueSize": make([]byte, p.ImpactingQueuesSize),
@@ -67,12 +68,15 @@ func (p *YunikornProvider) InitCase(ctx context.Context) error {
 		"memoryGuarantee":    memoryGuaranteed,
 		"memoryMax":          memoryMax,
 		"preemption":         p.Preemption,
-	})), decoder.CreateHandler(utils.Resources))
+	})), utils.CreateOrUpdateConfigMapsHandler(utils.Resources, &configChanged))
 	if err != nil {
 		return err
 	}
 
-	return utils.RestartDeployment(ctx, utils.Resources, "yunikorn-scheduler", "yunikorn")
+	if configChanged {
+		return utils.RestartDeployment(ctx, utils.Resources, "yunikorn-scheduler", "yunikorn")
+	}
+	return nil
 }
 
 func (p *YunikornProvider) AddJobs(ctx context.Context) error {
