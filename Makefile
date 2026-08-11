@@ -445,8 +445,15 @@ down:
 	$(MAKE) cleanup-yunikorn-resources
 	$(MAKE) wait-all-schedulers
 
+.PHONY: validate-result-scenario
+validate-result-scenario:
+	@case "$(RELATIVE_DASHBOARD_SCENARIO)" in \
+		1|2|3|4|5|6|7|8) ;; \
+		*) echo 'RELATIVE_DASHBOARD_SCENARIO must be an integer from 1 to 8' >&2; exit 1;; \
+	esac
+
 .PHONY: serial-test
-serial-test: ensure-directories
+serial-test: validate-result-scenario ensure-directories
 	mkdir -p ./tmp
 	rm -f ./tmp/result-to-millis \
 		./tmp/relative-dashboard-from-millis ./tmp/relative-dashboard-to-millis \
@@ -510,7 +517,7 @@ end-overview:
 	make down-overview
 
 .PHONY: save-result
-save-result:
+save-result: validate-result-scenario
 	test -s ./tmp/result-from-millis
 	test -s ./tmp/result-to-millis
 	test ! -e ./tmp/result-staging || (echo 'Result staging already exists: ./tmp/result-staging' >&2; exit 1)
@@ -535,14 +542,11 @@ save-result:
 		fi; \
 	fi
 	mkdir -p ./results
-	mv ./tmp/result-staging ./results/$(shell date +%s)
+	@set -eu; \
+		target="./results/scenario-$(RELATIVE_DASHBOARD_SCENARIO)"; \
+		rm -rf -- "$$target"; \
+		mv ./tmp/result-staging "$$target"
 	rm -f ./tmp/result-from-millis ./tmp/result-to-millis
-
-.PHONY: move-to-result
-move-to-result:
-	mkdir -p ./tmp
-	mkdir -p ./results
-	mv ./tmp ./results/$(shell date +%s)
 
 .PHONY: delete-registry
 delete-registry:

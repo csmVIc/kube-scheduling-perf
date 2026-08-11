@@ -106,14 +106,15 @@ The latest validated run completed all 24 cases successfully in `44m51.248s` (`2
 
 #### 4. View Results
 
-Every scenario creates `results/<unix-timestamp>/`:
+Every scenario writes to a stable directory and replaces the previous run of the same scenario:
 
 ```text
-results/<timestamp>/
-├── envs.txt
-├── result-window.txt
-└── output/
-    └── job-submission.png
+results/
+└── scenario-<1..8>/
+    ├── envs.txt
+    ├── result-window.txt
+    └── output/
+        └── job-submission.png
 ```
 
 The persistent Grafana endpoint is:

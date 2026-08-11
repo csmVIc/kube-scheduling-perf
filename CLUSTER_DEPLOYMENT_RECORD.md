@@ -644,7 +644,7 @@ Grafana Ingress 的版本化部署源位于仓库，当前文件指纹如下：
 ## 24. 2026-08-11 100ms 采集与单相对面板归档验证
 
 - Audit Exporter ServiceMonitor 的抓取间隔和超时均调整为 `100ms`，并固定 `honorLabels=false`；实验资源命名空间因此稳定写入 Prometheus 的 `exported_namespace`。主 Dashboard 的 8 个面板和 8 个相对 Dashboard 的 4 个指标面板同步采用 `100ms` 最小查询步长，`rate` 窗口仍为 `5s`。
-- 结果保存流程改为三套调度器完成后更新相对 Dashboard，再归档 `envs.txt`、`result-window.txt` 和唯一的 `output/job-submission.png`。源码不再渲染原 `perf` Dashboard 的 8 个面板，也不再创建、复制或归档每调度器审计日志；集群主审计日志重置和 Audit Exporter 重启保留。
+- 结果保存流程改为三套调度器完成后更新相对 Dashboard，再归档 `envs.txt`、`result-window.txt` 和唯一的 `output/job-submission.png`。目录固定为 `results/scenario-1` 至 `results/scenario-8`，同场景的新结果直接替换上一轮。源码不再渲染原 `perf` Dashboard 的 8 个面板，也不再创建、复制或归档每调度器审计日志；集群主审计日志重置和 Audit Exporter 重启保留。
 - 完整测试于 `2026-08-11 12:05:35` 至 `12:50:26` CST 运行，总耗时 `2691.248s`（`44m51.248s`）。8 个场景、24/24 组 `TestBatchJob`、24/24 个 Prometheus 抓取屏障和 8/8 个元数据结果目录全部通过；运行归档为 `/root/benchmark-full-runs/full-100ms-single-panel-20260811T040535Z`。
 - 完整窗口内 Audit Exporter 目标始终 `up`，抓取耗时平均约 `1.143ms`、P99 约 `1.721ms`、最大约 `2.129ms`，100ms 抓取未造成超时。
 - 场景 1–2 因仓库 ServiceMonitor 机械保留 `honorLabels=true`，与远端部署包的有效 `false` 不一致，导致 `exported_namespace` 缺失和图片 warning。提交 `69142a954a17bef64133662ce041a1c291651586` 已定向修正；场景 3–8 随后各成功保存一张 `3200×1800` 相对面板 PNG。图片按既定规则不作为完整测试失败条件。

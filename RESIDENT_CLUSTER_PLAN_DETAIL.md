@@ -386,13 +386,13 @@ spec:
 
 ### 8.3 保存单张相对 Dashboard 图片
 
-原 `perf` Dashboard 继续在 Grafana 中正常展示，但结果归档不再渲染其 8 个面板。设置了场景编号的 `serial-test` 在相对 Dashboard 更新后，等待 Grafana API 返回与本轮一致的绝对时间窗，再通过 `127.0.0.1:8080/grafana` 只渲染 `Job Submission — Created vs Scheduled` 面板，文件固定为 `output/job-submission.png`。完整 `make` 最终生成场景 1 至 8 共 8 张图片；未设置场景编号的独立 `serial-test` 只归档元数据。图片渲染失败只记录警告，仍完成元数据和结果目录归档。
+原 `perf` Dashboard 继续在 Grafana 中正常展示，但结果归档不再渲染其 8 个面板。设置了场景编号的 `serial-test` 在相对 Dashboard 更新后，等待 Grafana API 返回与本轮一致的绝对时间窗，再通过 `127.0.0.1:8080/grafana` 只渲染 `Job Submission — Created vs Scheduled` 面板，文件固定为 `output/job-submission.png`。结果目录固定为 `results/scenario-1` 至 `results/scenario-8`；同一场景的新结果在 staging 完成后直接替换上一轮目录。完整 `make` 最终生成场景 1 至 8 共 8 张图片；未设置合法场景编号的独立 `serial-test` 不执行，避免产生无法归类的结果。图片渲染失败只记录警告，仍完成元数据和结果目录归档。
 
 Audit Exporter 的 ServiceMonitor 抓取间隔和超时均设为 `100ms`，并保持 `honorLabels=false`，使实验资源命名空间稳定写入 `exported_namespace`。原 `perf` Dashboard 的 8 个面板以及相对 Dashboard 的 4 个指标面板最小查询步长同步设为 `100ms`。现有 `rate` 计算窗口继续使用 `5s`，避免十分之一秒抓取下的瞬时速率曲线过度抖动。
 
 ### 8.4 固化八个相对时间 Dashboard
 
-仓库保存一份统一的相对时间 Dashboard 模板。默认完整 `make` 为八个场景依次传入内部场景编号；每个场景的三套调度方案全部成功后，先根据该场景的实际指标生成并更新对应 Dashboard，确认 Grafana 加载后再截图和归档。直接执行未设置场景编号的 `serial-test`、单调度器测试、单场景冒烟或结果保存不会生成或覆盖这些 Dashboard。
+仓库保存一份统一的相对时间 Dashboard 模板。默认完整 `make` 为八个场景依次传入内部场景编号；每个场景的三套调度方案全部成功后，先根据该场景的实际指标生成并更新对应 Dashboard，确认 Grafana 加载后再截图和归档。直接执行未设置合法场景编号的 `serial-test` 或结果保存会在实验开始前失败；单调度器测试和单场景冒烟不会生成或覆盖这些 Dashboard。
 
 每套调度方案在 Audit Exporter 重置完成后记录本轮指标起点，在最终指标确认被 Prometheus 抓取后记录终点。生成阶段以 `100ms` 查询步长在各自时间窗内查找第一个实际工作 Pod 创建样本，以 Kueue 为共同 T+0，按毫秒计算 Volcano 和 YuniKorn 的相对偏移。YuniKorn 的 Created 曲线只统计 Controller Manager 创建的实际工作 Pod；Scheduled 曲线从总数中扣除 YuniKorn Scheduler 创建的 placeholder Pod，因此三套方案均以 `10000` 个实际工作 Pod 为目标。默认展示范围截止到第二套调度方案首次达到 `Scheduled >= 10000` 后 `5s`，允许最慢方案的后续曲线被截断。四个指标面板的最小查询步长均为 `100ms`。
 
