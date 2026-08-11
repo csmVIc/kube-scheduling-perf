@@ -25,7 +25,7 @@ spec:
       - args:
         - --audit-log-path
         - /var/log/kubernetes/kube-apiserver-audit.log
-        image: kind-registry:5000/ghcr.io/csmvic/kube-apiserver-audit-exporter:v0.0.26
+        image: ghcr.io/csmvic/kube-apiserver-audit-exporter:v0.0.27
         imagePullPolicy: IfNotPresent
         name: exporter
         ports:
