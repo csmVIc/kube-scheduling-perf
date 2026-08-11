@@ -8,7 +8,7 @@ metadata:
   namespace: monitoring
 spec:
   endpoints:
-  - honorLabels: true
+  - honorLabels: false
     interval: 100ms
     path: /metrics
     port: http
