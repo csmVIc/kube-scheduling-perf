@@ -230,13 +230,32 @@ jq -e --arg uid "perf-relative-s${SCENARIO}" --arg scenario "${SCENARIO}" '
   and (.templating.list[] | select(.name == "scheduler") | .allValue) == "kueue|volcano|yunikorn"
 ' "${dashboard}" >/dev/null
 
-configmap="scheduling-perf-relative-s1-s7"
+configmap="scheduling-perf-relative-s1-s8"
+legacy_configmap="scheduling-perf-relative-s1-s7"
 dashboard_key="relative-s${SCENARIO}.json"
 kubectl_cmd=("${KUBECTL}" --kubeconfig "${KUBECONFIG}")
 
 if "${kubectl_cmd[@]}" -n "${GRAFANA_NAMESPACE}" get configmap "${configmap}" >/dev/null 2>&1; then
   patch="$(jq -cn --arg key "${dashboard_key}" --rawfile dashboard "${dashboard}" '{data:{($key):$dashboard}}')"
   "${kubectl_cmd[@]}" -n "${GRAFANA_NAMESPACE}" patch configmap "${configmap}" --type merge -p "${patch}" >/dev/null
+elif legacy_object="$("${kubectl_cmd[@]}" -n "${GRAFANA_NAMESPACE}" get configmap "${legacy_configmap}" -o json 2>/dev/null)"; then
+  printf '%s' "${legacy_object}" | jq \
+    --arg name "${configmap}" \
+    --arg namespace "${GRAFANA_NAMESPACE}" \
+    --arg key "${dashboard_key}" \
+    --rawfile dashboard "${dashboard}" '
+    {
+      apiVersion: "v1",
+      kind: "ConfigMap",
+      metadata: {
+        name: $name,
+        namespace: $namespace,
+        labels: {grafana_dashboard: "1"}
+      },
+      data: ((.data // {}) + {($key): $dashboard})
+    }
+  ' >"${manifest}"
+  "${kubectl_cmd[@]}" apply -f "${manifest}" >/dev/null
 else
   jq -n \
     --arg name "${configmap}" \
@@ -257,10 +276,8 @@ else
   "${kubectl_cmd[@]}" apply -f "${manifest}" >/dev/null
 fi
 
-if ((SCENARIO == 8)); then
-  "${kubectl_cmd[@]}" -n "${GRAFANA_NAMESPACE}" delete configmap scheduling-perf-relative-s8 \
-    --ignore-not-found --wait=false >/dev/null
-fi
+"${kubectl_cmd[@]}" -n "${GRAFANA_NAMESPACE}" delete configmap \
+  "${legacy_configmap}" scheduling-perf-relative-s8 --ignore-not-found --wait=false >/dev/null
 
 printf '%s\n' "${kueue_first}" >"${RESULT_WINDOW_DIR}/relative-dashboard-from-millis"
 printf '%s\n' "${dashboard_to_millis}" >"${RESULT_WINDOW_DIR}/relative-dashboard-to-millis"

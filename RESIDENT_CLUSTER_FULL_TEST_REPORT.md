@@ -811,7 +811,7 @@ T0 中场景 1 的 Kueue、Volcano、YuniKorn 均通过，耗时分别为 `118.0
 
 - Prometheus `/api/v1/targets` 显示 Audit Exporter 目标为 `scrapeInterval=500ms`、`scrapeTimeout=500ms`、`health=up`。
 - `Scheduling Performance`（UID `perf`）仍为 8 个面板，8 个面板的最小查询步长均为 `500ms`。
-- `scheduling-perf-relative-s1-s7` 包含 `relative-s1.json` 至 `relative-s8.json` 八个键；UID 为 `perf-relative-s1` 至 `perf-relative-s8`，标签统一为 `benchmark, relative-time, scenario-N`，四个指标面板均为 `500ms`，没有未替换模板占位符。旧 `scheduling-perf-relative-s8` ConfigMap 已删除。
+- 当时使用的 `scheduling-perf-relative-s1-s7`（后续已更名为 `scheduling-perf-relative-s1-s8`）包含 `relative-s1.json` 至 `relative-s8.json` 八个键；UID 为 `perf-relative-s1` 至 `perf-relative-s8`，标签统一为 `benchmark, relative-time, scenario-N`，四个指标面板均为 `500ms`，没有未替换模板占位符。旧 `scheduling-perf-relative-s8` ConfigMap 已删除。
 - 每个场景都按 `500ms` 步长查询对应历史时间窗。Kueue 和 Volcano 的 Created/Scheduled 均为 `10000/10000`；YuniKorn 非 Gang 场景为 `10000/10000`，Gang 场景因 10,000 个 placeholder Pod 加 10,000 个实际 Pod 为 `20000/20000`，符合 YuniKorn Gang 设计。
 - 八个相对 Dashboard 的 T+0 均取各场景三套方案中首个 Kueue Pod 样本，Volcano/YuniKorn 使用毫秒级 PromQL offset；场景 8 的偏移为 `128500ms` 和 `230000ms`，证明不再回退到整秒计算。
 
@@ -928,7 +928,7 @@ T1 完成后 Wrapper 自动执行 `make down` 并返回 `0`，随后人工复核
 - Prometheus 当前目标为 `health=up`、`scrapeInterval=100ms`、`scrapeTimeout=100ms`。完整测试窗口内 `min_over_time(up[46m])=1`，没有失败抓取样本。
 - 完整窗口的 `scrape_duration_seconds` 平均为 `1.143ms`、P99 为 `1.721ms`、最大为 `2.129ms`，均显著低于 `100ms` 超时。
 - `Scheduling Performance`（UID `perf`）仍有 8 个面板，8 个面板的最小查询步长均为 `100ms`；原 Dashboard 未被删除，也不再作为结果图片来源。
-- `scheduling-perf-relative-s1-s7` 仍统一包含 `relative-s1.json` 至 `relative-s8.json`，UID、标签和 Scheduler 变量保持一致，4 个指标面板的最小查询步长均为 `100ms`。
+- 测试完成后统一 ConfigMap 已更名为 `scheduling-perf-relative-s1-s8`，仍包含 `relative-s1.json` 至 `relative-s8.json`；仅修正名称，UID、标签、Scheduler 变量和 Dashboard 内容保持不变，4 个指标面板的最小查询步长均为 `100ms`。
 - 场景 3 至 8 的相对 Dashboard 均使用本轮首个实际工作 Pod 作为 T+0，并按“第二套方案达到实际 `Scheduled=10000` 后 5 秒”确定截止时间。YuniKorn 的 Created/Scheduled 均排除 placeholder Pod。
 
 ### 21.6 场景 1–2 图片失败、根因与修复
