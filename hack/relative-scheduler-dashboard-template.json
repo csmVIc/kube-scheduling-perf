@@ -31,7 +31,7 @@
       },
       "id": 10,
       "options": {
-        "content": "## Scenario __SCENARIO__ — __MODE__, __SHAPE__\nAll three schedulers’ first observed Pod creation samples are aligned to T+0 = __T0_CST__ CST (UTC+8). Volcano is shifted __VOLCANO_OFFSET_SECONDS__s earlier and YuniKorn __YUNIKORN_OFFSET_SECONDS__s earlier; Kueue is the reference. Use **Scheduler** to select one or more schedulers. Drag over a chart to zoom in, and use the Grafana time picker or **Zoom out** to change the visible interval.",
+        "content": "## Scenario __SCENARIO__ — __MODE__, __SHAPE__\nAll three schedulers’ first observed actual workload Pod creation samples are aligned to T+0 = __T0_CST__ CST (UTC+8). Volcano is shifted __VOLCANO_OFFSET_SECONDS__s earlier and YuniKorn __YUNIKORN_OFFSET_SECONDS__s earlier; Kueue is the reference. YuniKorn placeholder Pods are excluded from Created and Scheduled. The default range ends 5s after the second scheduler reaches 10,000 actual Scheduled Pods, so the slowest scheduler may be truncated. Use **Scheduler** to select one or more schedulers. Drag over a chart to zoom in, and use the Grafana time picker or **Zoom out** to change the visible interval.",
         "mode": "markdown"
       },
       "title": "Scenario __SCENARIO__ alignment",
@@ -42,7 +42,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Dashed lines are Pods created; solid lines are Pods scheduled. All schedulers share the same TestBatchJob start.",
+      "description": "Dashed lines are actual workload Pods created; solid lines are actual workload Pods scheduled. YuniKorn placeholder Pods are excluded, and all schedulers are aligned by their first actual workload Pod creation sample.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -264,7 +264,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(api_requests_total{cluster=~\"$scheduler\", exported_namespace=\"bench-yunikorn\", resource=\"pods\", verb=\"create\"} offset -__YUNIKORN_OFFSET_DURATION__)",
+          "expr": "sum(api_requests_total{cluster=~\"$scheduler\", exported_namespace=\"bench-yunikorn\", resource=\"pods\", verb=\"create\", user=\"kube-controller-manager\"} offset -__YUNIKORN_OFFSET_DURATION__)",
           "instant": false,
           "legendFormat": "YuniKorn Created",
           "range": true,
@@ -277,7 +277,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(pod_scheduling_latency_seconds_count{cluster=~\"$scheduler\", exported_namespace=\"bench-yunikorn\"} offset -__YUNIKORN_OFFSET_DURATION__)",
+          "expr": "clamp_min(sum(pod_scheduling_latency_seconds_count{cluster=~\"$scheduler\", exported_namespace=\"bench-yunikorn\"} offset -__YUNIKORN_OFFSET_DURATION__) - (sum(api_requests_total{cluster=~\"$scheduler\", exported_namespace=\"bench-yunikorn\", resource=\"pods\", verb=\"create\", user=\"yunikorn-scheduler\"} offset -__YUNIKORN_OFFSET_DURATION__) or vector(0)), 0)",
           "instant": false,
           "legendFormat": "YuniKorn Scheduled",
           "range": true,

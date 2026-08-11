@@ -414,6 +414,6 @@ Audit Exporter 的 ServiceMonitor 抓取间隔和超时均设为 `500ms`，全�
 
 仓库保存一份统一的相对时间 Dashboard 模板。默认完整 `make` 为八个场景依次传入内部场景编号；每个场景的三套调度方案全部成功、结果完成归档后，才根据该场景的实际指标生成并更新对应 Dashboard。直接执行 `serial-test`、单调度器测试、单场景冒烟或结果保存时不会设置该内部编号，因此不会生成或覆盖这些 Dashboard。
 
-每套调度方案在 Audit Exporter 重置完成后记录本轮指标起点，在最终指标确认被 Prometheus 抓取后记录终点。生成阶段以 `500ms` 查询步长在各自时间窗内查找第一个 Pod 创建样本，以 Kueue 为共同 T+0，按毫秒计算 Volcano 和 YuniKorn 的相对偏移，并据三者对齐后的最晚结束时间设置默认展示范围。四个指标面板的最小查询步长均为 `500ms`。
+每套调度方案在 Audit Exporter 重置完成后记录本轮指标起点，在最终指标确认被 Prometheus 抓取后记录终点。生成阶段以 `500ms` 查询步长在各自时间窗内查找第一个实际工作 Pod 创建样本，以 Kueue 为共同 T+0，按毫秒计算 Volcano 和 YuniKorn 的相对偏移。YuniKorn 的 Created 曲线只统计 Controller Manager 创建的实际工作 Pod；Scheduled 曲线从总数中扣除 YuniKorn Scheduler 创建的 placeholder Pod，因此三套方案均以 `10000` 个实际工作 Pod 为目标。默认展示范围截止到第二套调度方案首次达到 `Scheduled >= 10000` 后 `5s`，允许最慢方案的后续曲线被截断。四个指标面板的最小查询步长均为 `500ms`。
 
 八个场景统一更新 `scheduling-perf-relative-s1-s7` ConfigMap 中各自的 JSON；该 ConfigMap 名称仅为历史遗留名称，不再表示只包含场景 1 至 7。场景 8 首次按新方案刷新后删除旧的 `scheduling-perf-relative-s8` ConfigMap，避免 Grafana 加载重复 Dashboard。八个 Dashboard 的标签统一为 `benchmark`、`relative-time` 和各自的 `scenario-N`。Dashboard UID 固定为 `perf-relative-s1` 至 `perf-relative-s8`，继续支持 Scheduler 多选和 Grafana 原生时间缩放；原 `perf` Dashboard 不受影响。完整 `make` 全部成功时八个 Dashboard 均刷新为本轮数据，任一场景失败时不会为该失败场景生成配置。
