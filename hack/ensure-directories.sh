@@ -31,9 +31,6 @@ ensure_directory() {
     echo "Ensured directory: $dir (owner: $(ls -ld "$dir" | awk '{print $3":"$4}'))"
 }
 
-# Create logs directory
-ensure_directory "${ROOT_DIR}/logs"
-
 # Create bin directory
 ensure_directory "${ROOT_DIR}/bin"
 
@@ -46,13 +43,10 @@ ensure_directory "${ROOT_DIR}/go-build"
 # Create registry-data directory
 ensure_directory "${ROOT_DIR}/registry-data"
 
-# Create output directory
-ensure_directory "${ROOT_DIR}/output"
-
 # Create results directory
 ensure_directory "${ROOT_DIR}/results"
 
 # Create tmp directory
 ensure_directory "${ROOT_DIR}/tmp"
 
-echo "Directories created successfully!" 
+echo "Directories created successfully!"

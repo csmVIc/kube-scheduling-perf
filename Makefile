@@ -45,7 +45,6 @@ KUBECONFIG ?= /root/benchmark-1348-deploy/kubeconfig
 KUBECTL ?= /root/benchmark-1348-deploy/bin/kubectl
 KUBECTL_CMD = $(KUBECTL) --kubeconfig $(KUBECONFIG)
 RESIDENT_DEPLOY_DIR ?= /root/benchmark-1348-deploy
-RESIDENT_AUDIT_LOG ?= $(RESIDENT_DEPLOY_DIR)/logs/kube-apiserver-audit.log
 CONTROL_PLANE_CONTAINER ?= $(KIND_CLUSTER_NAME)-control-plane
 AUDIT_EXPORTER_NAMESPACE ?= kube-system
 AUDIT_EXPORTER_DEPLOYMENT ?= kube-apiserver-audit-exporter
@@ -148,13 +147,11 @@ start-$(1):
 
 .PHONY: end-$(1)
 end-$(1):
-	mkdir -p ./logs
 	$(MAKE) wait-audit-metrics-scraped SCHEDULER=$(1)
 	mkdir -p ./tmp
 	@timestamp="$$$$(date +%s%3N)"; \
 	printf '%s\n' "$$$$timestamp" > ./tmp/result-$(1)-to-millis; \
 	printf '%s\n' "$$$$timestamp" > ./tmp/result-to-millis
-	cp $(RESIDENT_AUDIT_LOG) ./logs/kube-apiserver-audit.$(1).log
 	$(MAKE) down-$(1)
 
 .PHONY: up-$(1)
@@ -182,9 +179,7 @@ test-batch-job-$(1): test-batch-job-$(1)
 
 .PHONY: reset-auditlog-$(1)
 reset-auditlog-$(1):
-	mkdir -p ./logs
 	$(MAKE) reset-audit-exporter SCHEDULER=$(1)
-	true > ./logs/kube-apiserver-audit.$(1).log
 
 endef
 
@@ -453,7 +448,9 @@ down:
 .PHONY: serial-test
 serial-test: ensure-directories
 	mkdir -p ./tmp
-	rm -f ./tmp/result-to-millis
+	rm -f ./tmp/result-to-millis \
+		./tmp/relative-dashboard-from-millis ./tmp/relative-dashboard-to-millis \
+		./tmp/relative-dashboard-from-iso ./tmp/relative-dashboard-to-iso
 	@for sched in $(SCHEDULERS); do \
 		rm -f "./tmp/result-$$sched-from-millis" "./tmp/result-$$sched-to-millis"; \
 	done
@@ -464,13 +461,15 @@ serial-test: ensure-directories
 		$(MAKE) end-$(sched); \
 	)
 
-	$(MAKE) save-result
 	@if test -n "$(RELATIVE_DASHBOARD_SCENARIO)"; then \
 		$(MAKE) update-relative-dashboard SCENARIO="$(RELATIVE_DASHBOARD_SCENARIO)"; \
 	fi
+	$(MAKE) save-result
 	@for sched in $(SCHEDULERS); do \
 		rm -f "./tmp/result-$$sched-from-millis" "./tmp/result-$$sched-to-millis"; \
 	done
+	rm -f ./tmp/relative-dashboard-from-millis ./tmp/relative-dashboard-to-millis \
+		./tmp/relative-dashboard-from-iso ./tmp/relative-dashboard-to-iso
 
 .PHONY: update-relative-dashboard
 update-relative-dashboard:
@@ -514,13 +513,27 @@ end-overview:
 save-result:
 	test -s ./tmp/result-from-millis
 	test -s ./tmp/result-to-millis
-	FROM="$$(cat ./tmp/result-from-millis)" TO="$$(cat ./tmp/result-to-millis)" ./hack/save-result-images.sh
 	test ! -e ./tmp/result-staging || (echo 'Result staging already exists: ./tmp/result-staging' >&2; exit 1)
 	mkdir -p ./tmp/result-staging
 	echo $(TEST_ENVS) > ./tmp/result-staging/envs.txt
 	printf 'from=%s\nto=%s\n' "$$(cat ./tmp/result-from-millis)" "$$(cat ./tmp/result-to-millis)" > ./tmp/result-staging/result-window.txt
-	-mv ./output ./tmp/result-staging/output
-	-mv ./logs ./tmp/result-staging/logs
+	@if test -n "$(RELATIVE_DASHBOARD_SCENARIO)"; then \
+		mkdir -p ./tmp/result-staging/output; \
+		if SCENARIO="$(RELATIVE_DASHBOARD_SCENARIO)" \
+			FROM="$$(cat ./tmp/relative-dashboard-from-millis)" \
+			TO="$$(cat ./tmp/relative-dashboard-to-millis)" \
+			FROM_ISO="$$(cat ./tmp/relative-dashboard-from-iso)" \
+			TO_ISO="$$(cat ./tmp/relative-dashboard-to-iso)" \
+			OUTPUT_FILE="$(CURDIR)/tmp/result-staging/output/job-submission.png" \
+			./hack/save-relative-dashboard-image.sh; then \
+			:; \
+		else \
+			status=$$?; \
+			echo "warning: relative Dashboard image was not saved (exit $$status)" >&2; \
+			rm -f ./tmp/result-staging/output/job-submission.png; \
+			rmdir ./tmp/result-staging/output 2>/dev/null || true; \
+		fi; \
+	fi
 	mkdir -p ./results
 	mv ./tmp/result-staging ./results/$(shell date +%s)
 	rm -f ./tmp/result-from-millis ./tmp/result-to-millis
@@ -528,7 +541,6 @@ save-result:
 .PHONY: move-to-result
 move-to-result:
 	mkdir -p ./tmp
-	-mv ./logs ./tmp/logs
 	mkdir -p ./results
 	mv ./tmp ./results/$(shell date +%s)
 

@@ -9,11 +9,11 @@ metadata:
 spec:
   endpoints:
   - honorLabels: true
-    interval: 500ms
+    interval: 100ms
     path: /metrics
     port: http
     scheme: http
-    scrapeTimeout: 500ms
+    scrapeTimeout: 100ms
   jobLabel: component
   namespaceSelector:
     matchNames:

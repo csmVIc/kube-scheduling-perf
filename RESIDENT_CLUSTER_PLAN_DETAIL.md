@@ -163,7 +163,6 @@ MEMORY_PER_NODE = 64Gi
 1. 将 Exporter 缩容到 0 并等待 Pod 完全退出。
 2. 清空常驻集群中的 API Server 审计文件。
 3. 使用本轮调度器名称作为 `--cluster-label`，以全新进程启动 Exporter。
-4. 清空本调度器对应的本地结果文件。
 
 审计文件为：
 
@@ -171,15 +170,7 @@ MEMORY_PER_NODE = 64Gi
 /var/log/kubernetes/kube-apiserver-audit.log
 ```
 
-本地结果文件为：
-
-```text
-reset-auditlog-kueue      -> ./logs/kube-apiserver-audit.kueue.log
-reset-auditlog-volcano    -> ./logs/kube-apiserver-audit.volcano.log
-reset-auditlog-yunikorn   -> ./logs/kube-apiserver-audit.yunikorn.log
-```
-
-Exporter 停止后才截断日志，避免旧 offset、进程内 Counter/Histogram 和对象时间状态污染本轮。Kueue、Volcano、YuniKorn 分别生成独立 `cluster` 标签。本地文件仍使用截断清空，不删除整个 `./logs` 目录。清空后再创建本轮 Job。Exporter 不再保存测试前参数；本轮结束后保持当前参数和 `1` 副本运行，下一轮开始时直接切换标签。
+Exporter 停止后才截断集群主审计日志，避免旧 offset、进程内 Counter/Histogram 和对象时间状态污染本轮。Kueue、Volcano、YuniKorn 分别生成独立 `cluster` 标签。源码不再创建 `./logs/kube-apiserver-audit.<scheduler>.log`。清空主日志后再创建本轮 Job。Exporter 不再保存测试前参数；本轮结束后保持当前参数和 `1` 副本运行，下一轮开始时直接切换标签。
 
 ### 3.8 `test-batch-job-<scheduler>`
 
@@ -197,17 +188,10 @@ Exporter 停止后才截断日志，避免旧 offset、进程内 Counter/Histogr
 
 1. 等待 Exporter 指标稳定，并确认 Prometheus 中存在晚于稳定时刻的最终抓取样本
 2. 以 epoch 毫秒记录本轮结果时间窗结束时间
-3. 将常驻集群审计日志复制到对应文件
-4. 保持本轮 Exporter 以 `1` 副本运行
-5. 调用 `down-<scheduler>`
+3. 保持本轮 Exporter 以 `1` 副本运行
+4. 调用 `down-<scheduler>`
 
-日志文件固定为：
-
-```text
-./logs/kube-apiserver-audit.kueue.log
-./logs/kube-apiserver-audit.volcano.log
-./logs/kube-apiserver-audit.yunikorn.log
-```
+本步骤不再复制或归档 API Server 审计日志。
 
 ### 3.10 `down-<scheduler>`
 
@@ -268,7 +252,8 @@ prepare-yunikorn
 start-yunikorn
 end-yunikorn
 
-save-result
+update-relative-dashboard（仅完整场景或显式传入场景编号）
+save-result（等待 Dashboard 加载、保存单张图片和元数据）
 ```
 
 删除 `prepare-overview`、`start-overview` 和 `end-overview` 调用。
@@ -289,9 +274,10 @@ make down
 
 `save-result` 只负责：
 
-- 使用串行实验开始前记录的毫秒级 `FROM` 和最后一次 Prometheus 抓取后的毫秒级 `TO` 调用 `save-result-images.sh`
-- 保存实验环境参数
-- 只将 `output`、`./logs` 和结果元数据归档到独立 staging 目录，不移动整个 `./tmp`
+- 当存在场景编号时，等待 Grafana Sidecar 加载本轮相对 Dashboard，并尝试保存其中的 `Job Submission — Created vs Scheduled` 面板；截图失败只告警，不改变测试结果
+- 保存 `envs.txt` 和完整串行实验的 `result-window.txt`
+- 将单张图片和结果元数据写入独立 staging 目录后原子归档，不移动整个 `./tmp`
+- 不复制或归档 `./logs`
 
 ## 4. Go 测试方案细节
 
@@ -394,26 +380,20 @@ spec:
 
 结果图片直接从常驻集群的 Grafana 和 Prometheus 生成。
 
-### 8.2 保留仓库日志目录
+### 8.2 取消审计日志归档
 
-每轮实验结束后，将常驻审计日志复制到仓库 `./logs`，然后由 `save-result` 按现有目录结构归档。
+继续在每套调度方案开始前停止 Audit Exporter、截断集群主审计日志并按对应 `cluster` 标签重启 Exporter，但不再创建或复制仓库 `./logs/kube-apiserver-audit.<scheduler>.log`，结果目录也不再包含 `logs/`。历史结果中的审计文件保持不变，不执行删除。
 
-不把结果归档路径改成 `/root/benchmark-1348-deploy/logs`。
+### 8.3 保存单张相对 Dashboard 图片
 
-已观察到截断正在写入的主审计文件可能产生稀疏 NUL 空洞；当前结果分析不使用原始审计文件，本轮暂不修改该链路。
+原 `perf` Dashboard 继续在 Grafana 中正常展示，但结果归档不再渲染其 8 个面板。设置了场景编号的 `serial-test` 在相对 Dashboard 更新后，等待 Grafana API 返回与本轮一致的绝对时间窗，再通过 `127.0.0.1:8080/grafana` 只渲染 `Job Submission — Created vs Scheduled` 面板，文件固定为 `output/job-submission.png`。完整 `make` 最终生成场景 1 至 8 共 8 张图片；未设置场景编号的独立 `serial-test` 只归档元数据。图片渲染失败只记录警告，仍完成元数据和结果目录归档。
 
-### 8.3 调整图片筛选条件
-
-`save-result-images.sh` 保留 `127.0.0.1:8080/grafana`。Dashboard 全部 8 个面板的查询将实验命名空间标签统一为 `exported_namespace=~"$namespace"`；渲染 URL 的 resource、user、verb 和 namespace 变量使用 Grafana 原生 `$__all`，cluster 仍显式选择 `kueue`、`volcano` 和 `yunikorn`。
-
-Audit Exporter 的 ServiceMonitor 抓取间隔和超时均设为 `500ms`，全部 8 个面板的最小查询步长同步设为 `500ms`。现有 `rate` 计算窗口继续使用 `5s`，避免半秒级抓取下的瞬时速率曲线过度抖动。
-
-图片使用完整串行实验的绝对 `FROM/TO` 时间窗，不再使用“等待后查询最近 N 秒”。Grafana 13 已验证能用现有 `panel-1` 至 `panel-8` 映射全部 8 个面板，不修改 Panel ID。
+Audit Exporter 的 ServiceMonitor 抓取间隔和超时均设为 `100ms`，原 `perf` Dashboard 的 8 个面板以及相对 Dashboard 的 4 个指标面板最小查询步长同步设为 `100ms`。现有 `rate` 计算窗口继续使用 `5s`，避免十分之一秒抓取下的瞬时速率曲线过度抖动。
 
 ### 8.4 固化八个相对时间 Dashboard
 
-仓库保存一份统一的相对时间 Dashboard 模板。默认完整 `make` 为八个场景依次传入内部场景编号；每个场景的三套调度方案全部成功、结果完成归档后，才根据该场景的实际指标生成并更新对应 Dashboard。直接执行 `serial-test`、单调度器测试、单场景冒烟或结果保存时不会设置该内部编号，因此不会生成或覆盖这些 Dashboard。
+仓库保存一份统一的相对时间 Dashboard 模板。默认完整 `make` 为八个场景依次传入内部场景编号；每个场景的三套调度方案全部成功后，先根据该场景的实际指标生成并更新对应 Dashboard，确认 Grafana 加载后再截图和归档。直接执行未设置场景编号的 `serial-test`、单调度器测试、单场景冒烟或结果保存不会生成或覆盖这些 Dashboard。
 
-每套调度方案在 Audit Exporter 重置完成后记录本轮指标起点，在最终指标确认被 Prometheus 抓取后记录终点。生成阶段以 `500ms` 查询步长在各自时间窗内查找第一个实际工作 Pod 创建样本，以 Kueue 为共同 T+0，按毫秒计算 Volcano 和 YuniKorn 的相对偏移。YuniKorn 的 Created 曲线只统计 Controller Manager 创建的实际工作 Pod；Scheduled 曲线从总数中扣除 YuniKorn Scheduler 创建的 placeholder Pod，因此三套方案均以 `10000` 个实际工作 Pod 为目标。默认展示范围截止到第二套调度方案首次达到 `Scheduled >= 10000` 后 `5s`，允许最慢方案的后续曲线被截断。四个指标面板的最小查询步长均为 `500ms`。
+每套调度方案在 Audit Exporter 重置完成后记录本轮指标起点，在最终指标确认被 Prometheus 抓取后记录终点。生成阶段以 `100ms` 查询步长在各自时间窗内查找第一个实际工作 Pod 创建样本，以 Kueue 为共同 T+0，按毫秒计算 Volcano 和 YuniKorn 的相对偏移。YuniKorn 的 Created 曲线只统计 Controller Manager 创建的实际工作 Pod；Scheduled 曲线从总数中扣除 YuniKorn Scheduler 创建的 placeholder Pod，因此三套方案均以 `10000` 个实际工作 Pod 为目标。默认展示范围截止到第二套调度方案首次达到 `Scheduled >= 10000` 后 `5s`，允许最慢方案的后续曲线被截断。四个指标面板的最小查询步长均为 `100ms`。
 
 八个场景统一更新 `scheduling-perf-relative-s1-s7` ConfigMap 中各自的 JSON；该 ConfigMap 名称仅为历史遗留名称，不再表示只包含场景 1 至 7。场景 8 首次按新方案刷新后删除旧的 `scheduling-perf-relative-s8` ConfigMap，避免 Grafana 加载重复 Dashboard。八个 Dashboard 的标签统一为 `benchmark`、`relative-time` 和各自的 `scenario-N`。Dashboard UID 固定为 `perf-relative-s1` 至 `perf-relative-s8`，继续支持 Scheduler 多选和 Grafana 原生时间缩放；原 `perf` Dashboard 不受影响。完整 `make` 全部成功时八个 Dashboard 均刷新为本轮数据，任一场景失败时不会为该失败场景生成配置。

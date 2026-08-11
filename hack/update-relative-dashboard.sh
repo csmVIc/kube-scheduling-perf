@@ -60,7 +60,7 @@ first_pod_millis() {
     --data-urlencode "query=${query}" \
     --data-urlencode "start=${from_seconds}" \
     --data-urlencode "end=${to_seconds}" \
-    --data-urlencode 'step=500ms' \
+    --data-urlencode 'step=100ms' \
     "${PROMETHEUS_URL%/}/api/v1/query_range")"
 
   first_seconds="$(printf '%s' "${response}" | jq -er --argjson lower "${from_seconds}" '
@@ -95,7 +95,7 @@ scheduled_target_millis() {
     --data-urlencode "query=${query}" \
     --data-urlencode "start=${from_seconds}" \
     --data-urlencode "end=${to_seconds}" \
-    --data-urlencode 'step=500ms' \
+    --data-urlencode 'step=100ms' \
     "${PROMETHEUS_URL%/}/api/v1/query_range")"
 
   target_seconds="$(printf '%s' "${response}" | jq -er '
@@ -261,6 +261,11 @@ if ((SCENARIO == 8)); then
   "${kubectl_cmd[@]}" -n "${GRAFANA_NAMESPACE}" delete configmap scheduling-perf-relative-s8 \
     --ignore-not-found --wait=false >/dev/null
 fi
+
+printf '%s\n' "${kueue_first}" >"${RESULT_WINDOW_DIR}/relative-dashboard-from-millis"
+printf '%s\n' "${dashboard_to_millis}" >"${RESULT_WINDOW_DIR}/relative-dashboard-to-millis"
+printf '%s\n' "${from_iso}" >"${RESULT_WINDOW_DIR}/relative-dashboard-from-iso"
+printf '%s\n' "${to_iso}" >"${RESULT_WINDOW_DIR}/relative-dashboard-to-iso"
 
 printf 'relative_dashboard_updated scenario=%s t0=%s volcano_offset=%s yunikorn_offset=%s configmap=%s\n' \
   "${SCENARIO}" "${t0_cst}" "${volcano_offset_duration}" "${yunikorn_offset_duration}" "${configmap}"

@@ -112,14 +112,8 @@ Every scenario creates `results/<unix-timestamp>/`:
 results/<timestamp>/
 ├── envs.txt
 ├── result-window.txt
-├── logs/
-│   ├── kube-apiserver-audit.kueue.log
-│   ├── kube-apiserver-audit.volcano.log
-│   └── kube-apiserver-audit.yunikorn.log
 └── output/
-    ├── panel-1.png
-    ├── ...
-    └── panel-8.png
+    └── job-submission.png
 ```
 
 The persistent Grafana endpoint is:
@@ -175,7 +169,7 @@ Generic existing-cluster support is not implemented. The current Makefile assume
 
 The customized `kube-apiserver-audit-exporter` reads API Server audit events and exports scheduler-labelled Prometheus metrics. The Grafana `perf` Dashboard compares scheduling latency, API call totals and rates, pods scheduled, and batch jobs completed across the three scheduler stacks.
 
-Raw audit files can contain sparse NUL regions after repeated truncation on the resident cluster. Prometheus metrics and Grafana panels are the primary benchmark outputs; do not assume every archived audit file is directly parseable as clean JSONL.
+The resident API Server audit file is still reset between scheduler runs and consumed by Audit Exporter, but it is no longer copied into result directories. Prometheus metrics and the relative Job Submission panel are the benchmark outputs.
 
 ### Repository Layout
 
