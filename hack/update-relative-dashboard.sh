@@ -276,8 +276,19 @@ else
   "${kubectl_cmd[@]}" apply -f "${manifest}" >/dev/null
 fi
 
-"${kubectl_cmd[@]}" -n "${GRAFANA_NAMESPACE}" delete configmap \
-  "${legacy_configmap}" scheduling-perf-relative-s8 --ignore-not-found --wait=false >/dev/null
+reload_after_cleanup=false
+for obsolete_configmap in "${legacy_configmap}" scheduling-perf-relative-s8; do
+  if "${kubectl_cmd[@]}" -n "${GRAFANA_NAMESPACE}" get configmap "${obsolete_configmap}" >/dev/null 2>&1; then
+    "${kubectl_cmd[@]}" -n "${GRAFANA_NAMESPACE}" delete configmap "${obsolete_configmap}" \
+      --wait=false >/dev/null
+    reload_after_cleanup=true
+  fi
+done
+
+if [[ "${reload_after_cleanup}" == "true" ]]; then
+  "${kubectl_cmd[@]}" -n "${GRAFANA_NAMESPACE}" annotate configmap "${configmap}" \
+    "benchmark.csmvic.io/reload-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" --overwrite >/dev/null
+fi
 
 printf '%s\n' "${kueue_first}" >"${RESULT_WINDOW_DIR}/relative-dashboard-from-millis"
 printf '%s\n' "${dashboard_to_millis}" >"${RESULT_WINDOW_DIR}/relative-dashboard-to-millis"
