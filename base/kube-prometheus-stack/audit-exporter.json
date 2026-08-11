@@ -1365,7 +1365,7 @@
           "disableTextWrap": false,
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(pod_scheduling_latency_seconds_count{cluster=~\"$cluster\", exported_namespace=~\"$namespace\", user=~\"$user\"}) by (cluster, user)",
+          "expr": "sum(pod_scheduling_latency_seconds_count{cluster=~\"$cluster\", cluster!=\"yunikorn\", exported_namespace=~\"$namespace\", user=~\"$user\"}) by (cluster, user)",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "instant": false,
@@ -1374,6 +1374,19 @@
           "range": true,
           "refId": "A",
           "useBackend": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum(yunikorn_workload_pods_scheduled_total{cluster=~\"$cluster\", exported_namespace=~\"$namespace\"}) by (cluster)",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "{{cluster}} workload scheduled",
+          "range": true,
+          "refId": "E"
         },
         {
           "datasource": {

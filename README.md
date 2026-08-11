@@ -168,7 +168,7 @@ Generic existing-cluster support is not implemented. The current Makefile assume
 
 ### Metrics
 
-The customized `kube-apiserver-audit-exporter` reads API Server audit events and exports scheduler-labelled Prometheus metrics. The Grafana `perf` Dashboard compares scheduling latency, API call totals and rates, pods scheduled, and batch jobs completed across the three scheduler stacks.
+The customized `kube-apiserver-audit-exporter` reads API Server audit events and exports scheduler-labelled Prometheus metrics. Its YuniKorn workload counter correlates Controller Manager Pod creation with binding events so placeholder Pods are excluded without subtracting unrelated counters. The Grafana `perf` Dashboard compares scheduling latency, API call totals and rates, pods scheduled, and batch jobs completed across the three scheduler stacks.
 
 The resident API Server audit file is still reset between scheduler runs and consumed by Audit Exporter, but it is no longer copied into result directories. Prometheus metrics and the relative Job Submission panel are the benchmark outputs.
 

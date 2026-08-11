@@ -173,7 +173,7 @@ etcd 数据位于 Kind 控制面容器对应的 Docker volume。执行 `kind del
 | Grafana Image Renderer | `v5.11.1` | `monitoring` | kube-prometheus-stack 的远程渲染子组件，版本由 values/Helm 参数固定 |
 | Traefik | chart `40.2.0` / app `v3.7.1` | `benchmark-grafana-ingress` | chart 先下载并校验，再从本地 tgz 安装；镜像固定 digest |
 | kube-state-metrics | `v2.19.1` | `monitoring` | kube-prometheus-stack 子组件 |
-| Audit Exporter | `v0.0.25` | `kube-system` | 本地维护 YAML apply，镜像运行时拉取 |
+| Audit Exporter | `v0.0.26` | `kube-system` | 本地维护 YAML apply，自维护公开镜像同步至 Kind Registry |
 | KWOK | `v0.7.0` | `kube-system` | 远程 URL 直接 apply |
 
 集群自带组件还包括 CoreDNS `v1.12.1`、kube-proxy `v1.34.8`、kindnet `v20260528-9350166c` 和 local-path-provisioner `v20260521-9fb22683`。
@@ -351,11 +351,11 @@ Grafana 启用了匿名 Viewer 和 `/grafana/` 子路径。`perf` Dashboard 由 
 
 ### Audit Exporter
 
-- 镜像：`ghcr.io/wzshiming/kube-apiserver-audit-exporter/kube-apiserver-audit-exporter:v0.0.25`
+- 镜像：`ghcr.io/csmvic/kube-apiserver-audit-exporter:v0.0.26`
 - Deployment：`kube-apiserver-audit-exporter`，`1` 副本
 - 从控制面宿主路径只读读取 `/var/log/kubernetes/kube-apiserver-audit.log`
 - ServiceMonitor 抓取间隔和超时均为 `100ms`，`honorLabels=false`，实验命名空间保存在 `exported_namespace`
-- 已验证指标包括 `pod_scheduling_latency_seconds` 和 `api_requests_total`
+- 已验证指标包括 `pod_scheduling_latency_seconds`、`api_requests_total` 和仅统计 YuniKorn 实际工作 Pod 的 `yunikorn_workload_pods_scheduled_total`
 - Grafana Dashboard：`Scheduling Audit Overview`，UID `scheduling-audit-overview`
 
 源码运行性能实验时，会在截断审计日志前停止 Audit Exporter，并为 Kueue、Volcano、YuniKorn 分别以独立 `cluster` 标签启动全新进程。测试结束后先等待 Exporter 指标稳定，再确认 Prometheus 已抓取到晚于稳定时刻的样本，最后以毫秒时间窗采集结果；Exporter 保持本轮标签和 `1` 副本运行，下一轮开始时直接停止、清空日志并切换标签。这样常驻部署不依赖 overview 集群，也不会把进程内指标或文件 offset 混入下一轮。
@@ -402,7 +402,7 @@ Grafana 启用了匿名 Viewer 和 `/grafana/` 子路径。`perf` Dashboard 由 
 | Grafana Sidecar | `quay.io/kiwigrid/k8s-sidecar:2.10.0` | `sha256:21b9fe7bb29d65caf2445ccbf96ff6eda5e589a92bd8f5188f957fe75b551d72` |
 | Traefik | `docker.io/traefik:v3.7.1` | `sha256:6b9cbca6fac42ab0075f5437d8dc1685cfd188626d8d515839ea94f8b6271c42` |
 | kube-state-metrics | `registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.1` | `sha256:85108987d044b18a098126732f98602df408888c0f7d456241f5abefb9744bc1` |
-| Audit Exporter | `ghcr.io/wzshiming/kube-apiserver-audit-exporter/kube-apiserver-audit-exporter:v0.0.25` | `sha256:26ba85a489ba6c25053b84d27f8048db9cc28eec490cadb62f37593da688857b` |
+| Audit Exporter | `ghcr.io/csmvic/kube-apiserver-audit-exporter:v0.0.26` | `sha256:f7b53cdeb9d921a1791d4ffee3c996a0ff2bdb9ea7b4af822c9dd89aed7ea1a1` |
 
 ## 12. 重建顺序
 

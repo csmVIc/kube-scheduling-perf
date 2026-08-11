@@ -79,17 +79,15 @@ scheduled_target_millis() {
   local to_millis="$4"
   local from_seconds=$((from_millis / 1000))
   local to_seconds=$((to_millis / 1000 + 1))
-  local scheduled_metric placeholder_metric
+  local scheduled_metric
   local query response target_seconds
 
-  scheduled_metric="pod_scheduling_latency_seconds_count{cluster=\"${scheduler}\", exported_namespace=\"${namespace}\"}"
-
   if [[ "${scheduler}" == "yunikorn" ]]; then
-    placeholder_metric="api_requests_total{cluster=\"${scheduler}\", exported_namespace=\"${namespace}\", resource=\"pods\", verb=\"create\", user=\"yunikorn-scheduler\"}"
-    query="clamp_min(sum(${scheduled_metric} and (timestamp(${scheduled_metric}) >= ${from_seconds})) - (sum(${placeholder_metric} and (timestamp(${placeholder_metric}) >= ${from_seconds})) or vector(0)), 0)"
+    scheduled_metric="yunikorn_workload_pods_scheduled_total{cluster=\"${scheduler}\", exported_namespace=\"${namespace}\"}"
   else
-    query="sum(${scheduled_metric} and (timestamp(${scheduled_metric}) >= ${from_seconds}))"
+    scheduled_metric="pod_scheduling_latency_seconds_count{cluster=\"${scheduler}\", exported_namespace=\"${namespace}\"}"
   fi
+  query="sum(${scheduled_metric} and (timestamp(${scheduled_metric}) >= ${from_seconds}))"
 
   response="$(curl -fsS --get \
     --data-urlencode "query=${query}" \

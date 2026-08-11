@@ -277,7 +277,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "clamp_min(sum(pod_scheduling_latency_seconds_count{cluster=~\"$scheduler\", exported_namespace=\"bench-yunikorn\"} offset -__YUNIKORN_OFFSET_DURATION__) - (sum(api_requests_total{cluster=~\"$scheduler\", exported_namespace=\"bench-yunikorn\", resource=\"pods\", verb=\"create\", user=\"yunikorn-scheduler\"} offset -__YUNIKORN_OFFSET_DURATION__) or vector(0)), 0)",
+          "expr": "sum(yunikorn_workload_pods_scheduled_total{cluster=~\"$scheduler\", exported_namespace=\"bench-yunikorn\"} offset -__YUNIKORN_OFFSET_DURATION__)",
           "instant": false,
           "legendFormat": "YuniKorn Scheduled",
           "range": true,
