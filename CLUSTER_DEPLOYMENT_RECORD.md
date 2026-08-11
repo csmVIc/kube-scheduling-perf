@@ -5,7 +5,7 @@
 本文记录远端调度基准集群的实际部署状态、安装来源、版本、关键配置、镜像摘要、重建顺序和已知风险，供故障恢复、版本更新和实验环境审计使用。
 
 - 初始记录时间：`2026-08-03T12:35:49Z`（北京时间 `2026-08-03 20:35:49`）
-- 最近变更时间：`2026-08-10`，完成固定空闲基线与 `500ms` 采集配置的 8 场景、24 Case 完整验证
+- 最近变更时间：`2026-08-11`，完成 `100ms` 采集与单相对面板归档的 8 场景、24 Case 完整验证
 - 服务器：`104.105.137.213`
 - 当前唯一 Kind 集群：`volcano-benchmark-1348`
 - Kubernetes：`v1.34.8`
@@ -332,7 +332,7 @@ Kueue、Scheduler Plugins 和 kube-prometheus-stack 的期望 SHA-256 已写入 
 
 安全说明：宿主机入口使用 `0.0.0.0:31003/31004/31005`，是否能被公网访问取决于服务器防火墙和云安全组。Grafana Ingress 已从外部验证可访问，且 Grafana 启用了匿名 Viewer，因此 `31005` 会公开基准指标；不需要公网访问时应在防火墙或云安全组限制来源。Grafana 密码保存在 Kubernetes Secret 中，不写入本文。
 
-Grafana 启用了匿名 Viewer 和 `/grafana/` 子路径。`perf` Dashboard 由 `manifests/perf-dashboard.json` 创建为 `scheduling-perf-dashboard` ConfigMap，固定 UID 为 `perf`；当前 20 条可见查询均使用 `exported_namespace`。Image Renderer 负责 `/render/d-solo/perf` 图片接口；完整 8 场景已经验证 `panel-1` 至 `panel-8` 均能渲染实际曲线。图片保存或内容检查只作为观察项，不作为后续完整测试通过条件。
+Grafana 启用了匿名 Viewer 和 `/grafana/` 子路径。`perf` Dashboard 由 `manifests/perf-dashboard.json` 创建为 `scheduling-perf-dashboard` ConfigMap，固定 UID 为 `perf`；当前 20 条可见查询均使用 `exported_namespace`。Image Renderer 同时支持原 `perf` 与 `perf-relative-s1` 至 `perf-relative-s8` 的 `/render/d-solo` 接口；当前结果归档只渲染相对 Dashboard 的 `Job Submission — Created vs Scheduled` 面板。图片保存或内容检查只作为观察项，不作为后续完整测试通过条件。
 
 ### Grafana Ingress
 
@@ -354,7 +354,7 @@ Grafana 启用了匿名 Viewer 和 `/grafana/` 子路径。`perf` Dashboard 由 
 - 镜像：`ghcr.io/wzshiming/kube-apiserver-audit-exporter/kube-apiserver-audit-exporter:v0.0.25`
 - Deployment：`kube-apiserver-audit-exporter`，`1` 副本
 - 从控制面宿主路径只读读取 `/var/log/kubernetes/kube-apiserver-audit.log`
-- ServiceMonitor 抓取间隔和超时均为 `500ms`
+- ServiceMonitor 抓取间隔和超时均为 `100ms`，`honorLabels=false`，实验命名空间保存在 `exported_namespace`
 - 已验证指标包括 `pod_scheduling_latency_seconds` 和 `api_requests_total`
 - Grafana Dashboard：`Scheduling Audit Overview`，UID `scheduling-audit-overview`
 
@@ -362,7 +362,7 @@ Grafana 启用了匿名 Viewer 和 `/grafana/` 子路径。`perf` Dashboard 由 
 
 ### 审计日志稀疏文件风险（已观察）
 
-当前实验通过截断正在由 API Server 写入的同一个审计文件来重置日志，但不会让 API Server 重新打开文件。第二轮完整测试已经观察到：API Server 保留旧文件 offset 后继续写入会形成带大段 NUL 空洞的稀疏文件，随后复制到结果目录的审计日志继承该问题。Gang 场景中的日志表观大小逐轮增长到数 GiB，但实际分配块明显更小；例如最后一个结果中的 Kueue 审计日志表观大小约 `5.80 GB`，而分配空间约 `313 MiB`。
+当前实验通过截断正在由 API Server 写入的同一个审计文件来重置日志，但不会让 API Server 重新打开文件。历史完整测试曾观察到：API Server 保留旧文件 offset 后继续写入会形成带大段 NUL 空洞的稀疏文件，旧结果目录中复制的审计日志继承该问题。当前源码不再创建或归档每调度器审计日志，因此该问题只保留为集群主日志和历史结果的已知风险。
 
 因此，非空或表观大小很大的审计日志不等于完整有效的 JSON Lines 文件。后续分析必须先检查 NUL、首条有效 JSON 的偏移和记录连续性；不能只根据文件大小验收。Prometheus 抓取屏障通过只能证明 Exporter 指标已被抓取，不能替代原始审计文件完整性验证。该风险尚未修复。
 
@@ -376,7 +376,7 @@ Grafana 启用了匿名 Viewer 和 `/grafana/` 子路径。`perf` Dashboard 由 
 - Grafana Dashboard 由 ConfigMap Sidecar 重新加载，可重建；Grafana 本地状态和手工修改不持久
 - API Server 审计日志位于服务器 `/root/benchmark-1348-deploy/logs`，独立于 Prometheus Pod，集群删除前仍可单独备份
 
-图片和原始审计日志保存失败不影响完整测试判定；完整测试以 24 组 Case、指标抓取屏障和最终基线健康为核心条件。若需要跨越监控 Pod 生命周期长期回溯，仍应另行导出数据，因为 Prometheus/Grafana 的 `emptyDir` 会在 Pod 重建后丢失。
+相对 Dashboard 图片保存失败不影响完整测试判定；源码已取消原始审计日志归档。完整测试以 24 组 Case、指标抓取屏障和最终基线健康为核心条件。若需要跨越监控 Pod 生命周期长期回溯，仍应另行导出数据，因为 Prometheus/Grafana 的 `emptyDir` 会在 Pod 重建后丢失。
 
 ## 11. 实际运行镜像摘要
 
@@ -640,3 +640,14 @@ Grafana Ingress 的版本化部署源位于仓库，当前文件指纹如下：
 - 本轮实际生成 8 个结果目录、64 张 PNG 和 24 份审计日志，但它们不作为后续完整测试的通过条件。23 份审计文件仍存在已知稀疏 NUL 空洞，只记录、不修复。
 - 测试后 `make down`、三套实验资源零残留断言、基础集群、调度器、监控和 Ingress 验收全部通过；`1001/1001` Node Ready，8 个调度 Deployment 与 Audit Exporter 均为 `1/1 Ready`，Prometheus 未重启。
 - 完整场景边界、24 个 Case 的时间和指标结果见 `RESIDENT_CLUSTER_FULL_TEST_REPORT.md` 第 20 节。
+
+## 24. 2026-08-11 100ms 采集与单相对面板归档验证
+
+- Audit Exporter ServiceMonitor 的抓取间隔和超时均调整为 `100ms`，并固定 `honorLabels=false`；实验资源命名空间因此稳定写入 Prometheus 的 `exported_namespace`。主 Dashboard 的 8 个面板和 8 个相对 Dashboard 的 4 个指标面板同步采用 `100ms` 最小查询步长，`rate` 窗口仍为 `5s`。
+- 结果保存流程改为三套调度器完成后更新相对 Dashboard，再归档 `envs.txt`、`result-window.txt` 和唯一的 `output/job-submission.png`。源码不再渲染原 `perf` Dashboard 的 8 个面板，也不再创建、复制或归档每调度器审计日志；集群主审计日志重置和 Audit Exporter 重启保留。
+- 完整测试于 `2026-08-11 12:05:35` 至 `12:50:26` CST 运行，总耗时 `2691.248s`（`44m51.248s`）。8 个场景、24/24 组 `TestBatchJob`、24/24 个 Prometheus 抓取屏障和 8/8 个元数据结果目录全部通过；运行归档为 `/root/benchmark-full-runs/full-100ms-single-panel-20260811T040535Z`。
+- 完整窗口内 Audit Exporter 目标始终 `up`，抓取耗时平均约 `1.143ms`、P99 约 `1.721ms`、最大约 `2.129ms`，100ms 抓取未造成超时。
+- 场景 1–2 因仓库 ServiceMonitor 机械保留 `honorLabels=true`，与远端部署包的有效 `false` 不一致，导致 `exported_namespace` 缺失和图片 warning。提交 `69142a954a17bef64133662ce041a1c291651586` 已定向修正；场景 3–8 随后各成功保存一张 `3200×1800` 相对面板 PNG。图片按既定规则不作为完整测试失败条件。
+- 测试后场景 1–2 的 Grafana 相对 Dashboard 已恢复为上一轮有效历史视图；8 个相对 Dashboard 当前均为 `100ms`，没有保留 1970 时间窗。
+- 最终 `make down`、三套实验资源零残留断言和 `verify-base.sh 1000` 全部通过；`1001/1001` Node Ready，8 个调度 Deployment 与 Audit Exporter 均为 `1/1 Ready`，服务器仓库已同步到 `69142a9`。
+- 完整场景边界、24 个 Case 的 CST 时间、制品明细和根因分析见 `RESIDENT_CLUSTER_FULL_TEST_REPORT.md` 第 21 节。

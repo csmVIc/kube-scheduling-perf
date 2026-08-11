@@ -388,7 +388,7 @@ spec:
 
 原 `perf` Dashboard 继续在 Grafana 中正常展示，但结果归档不再渲染其 8 个面板。设置了场景编号的 `serial-test` 在相对 Dashboard 更新后，等待 Grafana API 返回与本轮一致的绝对时间窗，再通过 `127.0.0.1:8080/grafana` 只渲染 `Job Submission — Created vs Scheduled` 面板，文件固定为 `output/job-submission.png`。完整 `make` 最终生成场景 1 至 8 共 8 张图片；未设置场景编号的独立 `serial-test` 只归档元数据。图片渲染失败只记录警告，仍完成元数据和结果目录归档。
 
-Audit Exporter 的 ServiceMonitor 抓取间隔和超时均设为 `100ms`，原 `perf` Dashboard 的 8 个面板以及相对 Dashboard 的 4 个指标面板最小查询步长同步设为 `100ms`。现有 `rate` 计算窗口继续使用 `5s`，避免十分之一秒抓取下的瞬时速率曲线过度抖动。
+Audit Exporter 的 ServiceMonitor 抓取间隔和超时均设为 `100ms`，并保持 `honorLabels=false`，使实验资源命名空间稳定写入 `exported_namespace`。原 `perf` Dashboard 的 8 个面板以及相对 Dashboard 的 4 个指标面板最小查询步长同步设为 `100ms`。现有 `rate` 计算窗口继续使用 `5s`，避免十分之一秒抓取下的瞬时速率曲线过度抖动。
 
 ### 8.4 固化八个相对时间 Dashboard
 

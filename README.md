@@ -102,7 +102,7 @@ The default target runs these eight scenarios:
 
 The complete matrix contains 24 `TestBatchJob` cases.
 
-The latest validated run completed all 24 cases successfully in `51m55.34s` (`2026-08-10 19:48:42` to `2026-08-10 20:40:37` CST). Audit Exporter and the Grafana dashboards used a `500ms` sampling/query step, and all 24 Prometheus capture barriers passed. Exact scenario and scheduler timestamps are recorded in [RESIDENT_CLUSTER_FULL_TEST_REPORT.md](RESIDENT_CLUSTER_FULL_TEST_REPORT.md#20-500ms-采集与固定空闲基线改造后的完整测试通过).
+The latest validated run completed all 24 cases successfully in `44m51.248s` (`2026-08-11 12:05:35` to `2026-08-11 12:50:26` CST). Audit Exporter and the Grafana dashboards used a `100ms` sampling/query step, and all 24 Prometheus capture barriers passed. Exact scenario and scheduler timestamps are recorded in [RESIDENT_CLUSTER_FULL_TEST_REPORT.md](RESIDENT_CLUSTER_FULL_TEST_REPORT.md#21-100ms-采集与单相对面板归档完整测试通过).
 
 #### 4. View Results
 
