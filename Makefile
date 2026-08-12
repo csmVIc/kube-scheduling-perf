@@ -185,6 +185,10 @@ endef
 
 $(foreach sched,$(SCHEDULERS),$(eval $(call test-scheduler,$(sched))))
 
+bin/crop-dashboard-image: hack/crop-dashboard-image.go
+	mkdir -p ./bin
+	$(GO_IN_DOCKER) go build -o ./bin/crop-dashboard-image ./hack/crop-dashboard-image.go
+
 .PHONY: wait-deployment-replicas
 wait-deployment-replicas:
 	@set -eu; \
@@ -525,20 +529,19 @@ save-result: validate-result-scenario
 	echo $(TEST_ENVS) > ./tmp/result-staging/envs.txt
 	printf 'from=%s\nto=%s\n' "$$(cat ./tmp/result-from-millis)" "$$(cat ./tmp/result-to-millis)" > ./tmp/result-staging/result-window.txt
 	@if test -n "$(RELATIVE_DASHBOARD_SCENARIO)"; then \
-		mkdir -p ./tmp/result-staging/output; \
-		if SCENARIO="$(RELATIVE_DASHBOARD_SCENARIO)" \
+		if $(MAKE) bin/crop-dashboard-image && \
+			SCENARIO="$(RELATIVE_DASHBOARD_SCENARIO)" \
 			FROM="$$(cat ./tmp/relative-dashboard-from-millis)" \
 			TO="$$(cat ./tmp/relative-dashboard-to-millis)" \
 			FROM_ISO="$$(cat ./tmp/relative-dashboard-from-iso)" \
 			TO_ISO="$$(cat ./tmp/relative-dashboard-to-iso)" \
-			OUTPUT_FILE="$(CURDIR)/tmp/result-staging/output/job-submission.png" \
+			OUTPUT_FILE="$(CURDIR)/tmp/result-staging/job-submission.png" \
 			./hack/save-relative-dashboard-image.sh; then \
 			:; \
 		else \
 			status=$$?; \
 			echo "warning: relative Dashboard image was not saved (exit $$status)" >&2; \
-			rm -f ./tmp/result-staging/output/job-submission.png; \
-			rmdir ./tmp/result-staging/output 2>/dev/null || true; \
+			rm -f ./tmp/result-staging/job-submission.png; \
 		fi; \
 	fi
 	mkdir -p ./results

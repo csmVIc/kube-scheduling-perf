@@ -325,9 +325,9 @@ make down
 
 ### 8.1 结果图片与元数据归档
 
-每个场景的三套调度方案测试完成并生成相对 Dashboard 后，等待 Grafana API 返回与本轮一致的时间窗，再通过 `127.0.0.1:8080/grafana` 渲染 `Job Submission — Created vs Scheduled` 面板。原 `perf` Dashboard 继续在 Grafana 中展示，但不作为结果图片来源。
+每个场景的三套调度方案测试完成并生成相对 Dashboard 后，等待 Grafana API 返回与本轮一致的时间窗，再通过 `127.0.0.1:8080/grafana` 渲染相对 Dashboard。结果图片统一截取顶部场景说明和 `Job Submission — Created vs Scheduled` 两个面板，并保留固定的上下留白。原 `perf` Dashboard 继续在 Grafana 中展示，但不作为结果图片来源。
 
-结果目录固定为 `results/scenario-1` 至 `results/scenario-8`，每个目录保存一张 `output/job-submission.png`，以及本轮的 `envs.txt` 和 `result-window.txt`。制品先写入独立 staging 目录，完成后原子替换对应场景的上一轮结果。完整 `make` 最终生成 8 个场景目录和 8 张图片；图片渲染失败只记录警告，不影响元数据和结果目录归档。
+结果目录固定为 `results/scenario-1` 至 `results/scenario-8`，每个目录直接保存一张 `job-submission.png`，以及本轮的 `envs.txt` 和 `result-window.txt`，不再创建 `output` 子目录。制品先写入独立 staging 目录，完成后原子替换对应场景的上一轮结果。完整 `make` 最终生成 8 个场景目录和 8 张图片；图片渲染失败只记录警告，不影响元数据和结果目录归档。
 
 ### 8.2 八个相对时间 Dashboard 模板
 
