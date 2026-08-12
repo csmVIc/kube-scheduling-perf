@@ -72,4 +72,3 @@ curl -fsS --max-time 180 --get --output "${rendered}" \
 "${CROP_IMAGE_BIN}" "${rendered}" "${temporary}" 8 62 1584 762
 [[ "$(od -An -tx1 -N8 "${temporary}" | tr -d ' \n')" == "89504e470d0a1a0a" ]]
 mv "${temporary}" "${OUTPUT_FILE}"
-trap - EXIT
