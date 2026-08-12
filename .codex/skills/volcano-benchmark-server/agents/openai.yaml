@@ -1,0 +1,4 @@
+interface:
+  display_name: "Volcano Benchmark Server"
+  short_description: "连接调度性能基准测试服务器并执行用户已授权的各类远程任务"
+  default_prompt: "使用 $volcano-benchmark-server 连接测试服务器并完成当前远程任务。"

@@ -12,7 +12,7 @@
 - 当前状态：`1001/1001` Node Ready，其中 `1000` 个 KWOK Node、`1` 个控制面 Node
 - 旧集群 `volcano-benchmark` 已删除，不再具备旧环境回滚能力
 - 本仓库源码已改为复用该常驻集群；普通 `make` 会按 Kueue、Volcano、YuniKorn 顺序直接运行实验，不再创建或删除 Kind 集群
-- `manage-benchmark-experiment` 和 `volcano-benchmark-server` Skill 已删除；本地 SSH 转发改由 `forward-grafana-local` 提供，日常查看 Dashboard 现优先使用持久 Ingress
+- 服务器连接统一使用仓库 `.codex/skills/volcano-benchmark-server`，完整测试使用 `.codex/skills/run-full-integrity-test`；Grafana 日常查看使用持久 Ingress，不再保留本地 SSH 转发 Skill
 
 本文不保存 kubeconfig 内容、SSH 密码、TLS 私钥、Grafana 密码或 Kubernetes Secret 数据。
 

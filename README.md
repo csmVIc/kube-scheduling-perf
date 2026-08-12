@@ -113,8 +113,7 @@ results/
 └── scenario-<1..8>/
     ├── envs.txt
     ├── result-window.txt
-    └── output/
-        └── job-submission.png
+    └── job-submission.png
 ```
 
 The persistent Grafana endpoint is:
@@ -123,7 +122,7 @@ The persistent Grafana endpoint is:
 http://<benchmark-server>:31005/grafana/d/perf/?theme=light
 ```
 
-For a local-only view, use the `forward-grafana-local` Codex Skill. It forwards Grafana to `http://127.0.0.1:8080` and returns a light-theme Dashboard URL, optionally preserving a historical `FROM`/`TO` window.
+The persistent endpoint is the standard Dashboard access path; no local SSH forwarding Skill is required.
 
 #### 5. Recover an Interrupted Run
 
