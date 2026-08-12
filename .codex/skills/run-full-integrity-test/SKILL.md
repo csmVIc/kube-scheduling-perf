@@ -1,6 +1,6 @@
 ---
 name: run-full-integrity-test
-description: Run one complete eight-scenario kube-scheduling-perf benchmark on the resident server cluster, restore the idle baseline with make down, publish the generated results, and create a timestamped full_test_report_MMDDHH.md. Use when the user asks to run a complete/full/integrity benchmark test or generate its report.
+description: Run one complete eight-scenario kube-scheduling-perf benchmark on the resident server cluster, restore the idle baseline with make down, and publish the generated results with a timestamped full_test_report_MMDDHH.md in one commit. Use when the user asks to run a complete/full/integrity benchmark test or generate its report.
 ---
 
 # Run Full Integrity Test
@@ -9,7 +9,7 @@ description: Run one complete eight-scenario kube-scheduling-perf benchmark on t
 
 - Local repository: `/Users/csmvic/Downloads/volcano-versions/kube-scheduling-perf`
 - Server repository: `/root/github/kube-scheduling-perf`
-- Read `.codex/AGENT.md` and `CLUSTER_DEPLOYMENT_RECORD.md` before operating the cluster.
+- Read `CLUSTER_DEPLOYMENT_RECORD.md` before operating the cluster.
 - Use `$volcano-benchmark-server` from `.codex/skills/volcano-benchmark-server/` to connect, and do not expose credentials, kubeconfig contents, Secrets, or tokens.
 
 ## 1. Prepare
@@ -19,11 +19,11 @@ description: Run one complete eight-scenario kube-scheduling-perf benchmark on t
 3. Record the CST start time immediately before creating the server session.
 4. Name the report `full_test_report_MMDDHH.md` using the start month, day, and hour. Example: `2026-08-12 09:23:10` becomes `full_test_report_081209.md`.
 5. Stop before testing if that report name already exists.
-6. Create a unique archive directory under `/root/benchmark-full-runs/` and a unique `tmux` session name using the full start timestamp.
+6. Create a unique temporary working directory under `/tmp/` and a unique `tmux` session name using the full start timestamp.
 
 ## 2. Execute
 
-Copy this Skill's `scripts/run-full-test.sh` into the server archive directory, mark it executable, and launch that copy in a detached `tmux` session. Pass the server repository and archive directory as arguments.
+Copy this Skill's `scripts/run-full-test.sh` into the temporary working directory, mark it executable, and launch that copy in a detached `tmux` session. Pass the server repository and temporary working directory as arguments.
 
 The wrapper performs the following work:
 
@@ -38,7 +38,7 @@ Monitor the completion marker so an SSH or network interruption does not interru
 
 ## 3. Evaluate
 
-Use the archived logs, exit-code files, result manifests, and `results/scenario-N` metadata. A run passes only when:
+Use the temporary logs, exit-code files, result manifests, and `results/scenario-N` metadata. A run passes only when:
 
 - `make` exits `0`.
 - `24/24` `TestBatchJob` cases pass with no failures or timeouts.
@@ -50,21 +50,9 @@ A missing or failed `job-submission.png` is recorded but does not fail an otherw
 
 Derive each scenario's CST boundary from the timestamped start of its `make serial-test` command to the next scenario boundary, using the end of top-level `make` for scenario 8. Read the exact metric window from its `result-window.txt`.
 
-## 4. Publish results
+## 4. Create the report
 
-After cleanup finishes, publish the current run's server-side `results/` changes:
-
-1. Run `git add -A -- results`.
-2. Confirm every staged path is under `results/`.
-3. If changes exist, commit them as `results: full test MMDDHH` and push `master`.
-4. If the remote advanced, rebase the result commit once before pushing. Stop and report a conflict.
-5. If no result changed, skip the empty commit and record that in the report.
-
-Fast-forward the local repository after the result push.
-
-## 5. Create the report
-
-Create the report in the local repository root with exactly these sections:
+Create the report in the server repository root with exactly these sections:
 
 ```markdown
 # 完整性测试报告（通过或失败）
@@ -80,7 +68,7 @@ Create the report in the local repository root with exactly these sections:
 
 ### 执行概要
 
-Record the tested Commit, command, `tmux` session, server archive directory, CST start/end in `YYYY-MM-DD HH:mm:ss`, precise duration, both exit codes, passed Case count, updated scenario count, result commit, push outcome, and overall status.
+Record the tested Commit, command, `tmux` session, CST start/end in `YYYY-MM-DD HH:mm:ss`, precise duration, both exit codes, passed Case count, updated scenario count, and overall status.
 
 ### 八个场景的时间边界与结果目录
 
@@ -96,10 +84,18 @@ If no issue occurred, state that no problem affecting the conclusion was found. 
 
 ### 最终结论
 
-State `通过` or `失败` and summarize the eight scenarios, 24 Cases, result publication, and idle-baseline restoration.
+State `通过` or `失败` and summarize the eight scenarios, 24 Cases, and idle-baseline restoration.
 
-Commit and push the report as a separate documentation commit containing no unrelated files.
+## 5. Publish and clean up
+
+After creating the report:
+
+1. Run `git add -A -- results full_test_report_MMDDHH.md`.
+2. Confirm every staged path is under `results/` or is the current report.
+3. Commit both as `results: full test MMDDHH` and push `master`.
+4. Fast-forward the local repository.
+5. Delete the server temporary working directory after its evidence has been incorporated into the report.
 
 ## 6. Return
 
-Return the overall result, report path, result commit, report commit, server archive path, and any non-blocking anomaly.
+Return the overall result, report path, combined publication commit, and any non-blocking anomaly.

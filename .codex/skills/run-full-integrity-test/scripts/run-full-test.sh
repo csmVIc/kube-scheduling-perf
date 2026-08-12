@@ -5,21 +5,21 @@ set -o nounset
 set -o pipefail
 
 if [[ "$#" -ne 2 ]]; then
-  printf 'usage: %s REPOSITORY RUN_ARCHIVE\n' "$0" >&2
+  printf 'usage: %s REPOSITORY RUN_WORKSPACE\n' "$0" >&2
   exit 2
 fi
 
 repository="$1"
-run_archive="$2"
+run_workspace="$2"
 
 if [[ ! -d "${repository}/.git" ]]; then
   printf 'repository is not a Git checkout: %s\n' "${repository}" >&2
   exit 2
 fi
 
-mkdir -p "${run_archive}"
-if [[ -e "${run_archive}/started-cst.txt" ]]; then
-  printf 'run archive already initialized: %s\n' "${run_archive}" >&2
+mkdir -p "${run_workspace}"
+if [[ -e "${run_workspace}/started-cst.txt" ]]; then
+  printf 'run workspace already initialized: %s\n' "${run_workspace}" >&2
   exit 2
 fi
 
@@ -61,28 +61,28 @@ write_result_manifest() {
 }
 
 started_epoch_millis="$(epoch_millis)"
-TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S' >"${run_archive}/started-cst.txt"
-printf '%s\n' "${started_epoch_millis}" >"${run_archive}/started-epoch-millis.txt"
-git rev-parse HEAD >"${run_archive}/tested-commit.txt"
-write_result_manifest "${run_archive}/results-before.tsv"
+TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S' >"${run_workspace}/started-cst.txt"
+printf '%s\n' "${started_epoch_millis}" >"${run_workspace}/started-epoch-millis.txt"
+git rev-parse HEAD >"${run_workspace}/tested-commit.txt"
+write_result_manifest "${run_workspace}/results-before.tsv"
 
 set +o errexit
-make 2>&1 | timestamp_stream | tee "${run_archive}/make.log"
+make 2>&1 | timestamp_stream | tee "${run_workspace}/make.log"
 make_status="${PIPESTATUS[0]}"
-printf '%s\n' "${make_status}" >"${run_archive}/make-exit-code.txt"
+printf '%s\n' "${make_status}" >"${run_workspace}/make-exit-code.txt"
 
-make down 2>&1 | timestamp_stream | tee "${run_archive}/make-down.log"
+make down 2>&1 | timestamp_stream | tee "${run_workspace}/make-down.log"
 down_status="${PIPESTATUS[0]}"
-printf '%s\n' "${down_status}" >"${run_archive}/make-down-exit-code.txt"
+printf '%s\n' "${down_status}" >"${run_workspace}/make-down-exit-code.txt"
 set -o errexit
 
-write_result_manifest "${run_archive}/results-after.tsv"
+write_result_manifest "${run_workspace}/results-after.tsv"
 ended_epoch_millis="$(epoch_millis)"
-TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S' >"${run_archive}/ended-cst.txt"
-printf '%s\n' "${ended_epoch_millis}" >"${run_archive}/ended-epoch-millis.txt"
-printf '%s\n' "$((ended_epoch_millis - started_epoch_millis))" >"${run_archive}/duration-millis.txt"
-printf 'make=%s\nmake_down=%s\n' "${make_status}" "${down_status}" >"${run_archive}/status.txt"
-touch "${run_archive}/complete"
+TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S' >"${run_workspace}/ended-cst.txt"
+printf '%s\n' "${ended_epoch_millis}" >"${run_workspace}/ended-epoch-millis.txt"
+printf '%s\n' "$((ended_epoch_millis - started_epoch_millis))" >"${run_workspace}/duration-millis.txt"
+printf 'make=%s\nmake_down=%s\n' "${make_status}" "${down_status}" >"${run_workspace}/status.txt"
+touch "${run_workspace}/complete"
 
 if [[ "${make_status}" -ne 0 ]]; then
   exit "${make_status}"
