@@ -18,7 +18,7 @@ description: Run one complete eight-scenario kube-scheduling-perf benchmark on t
 2. Require the server repository to have no tracked changes, then fast-forward it to `origin/master`.
 3. Record the CST start time immediately before creating the server session.
 4. Name the report `full_test_report_MMDDHH.md` using the start month, day, and hour. Example: `2026-08-12 09:23:10` becomes `full_test_report_081209.md`.
-5. Stop before testing if that report name already exists.
+5. If that report name already exists, append the first available numeric suffix: `_2`, `_3`, and so on. Never overwrite an existing report.
 6. Create a unique temporary working directory under `/tmp/` and a unique `tmux` session name using the full start timestamp.
 
 ## 2. Execute
@@ -90,7 +90,7 @@ State `通过` or `失败` and summarize the eight scenarios, 24 Cases, and idle
 
 After creating the report:
 
-1. Run `git add -A -- results full_test_report_MMDDHH.md`.
+1. Run `git add -A -- results <current-report-name>`.
 2. Confirm every staged path is under `results/` or is the current report.
 3. Commit both as `results: full test MMDDHH` and push `master`.
 4. Fast-forward the local repository.

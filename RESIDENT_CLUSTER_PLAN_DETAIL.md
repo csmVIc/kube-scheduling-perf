@@ -161,8 +161,10 @@ MEMORY_PER_NODE = 64Gi
 沿用当前源码的处理时机，不在 `make up` 中统一清理日志。每个目标在对应调度器任务开始前：
 
 1. 将 Exporter 缩容到 0 并等待 Pod 完全退出。
-2. 清空常驻集群中的 API Server 审计文件。
-3. 使用本轮调度器名称作为 `--cluster-label`，以全新进程启动 Exporter。
+2. 暂时移出 kube-apiserver 静态 Pod manifest，并等待 API Server 完全停止。
+3. 删除常驻集群中的 API Server 审计文件，再恢复静态 Pod manifest。
+4. 等待 API Server 重新启动并通过 Ready 检查。
+5. 使用本轮调度器名称作为 `--cluster-label`，以全新进程启动 Exporter。
 
 审计文件为：
 
@@ -170,7 +172,7 @@ MEMORY_PER_NODE = 64Gi
 /var/log/kubernetes/kube-apiserver-audit.log
 ```
 
-Exporter 停止后才截断集群主审计日志，避免旧 offset、进程内 Counter/Histogram 和对象时间状态污染本轮。Kueue、Volcano、YuniKorn 分别生成独立 `cluster` 标签。源码不再创建 `./logs/kube-apiserver-audit.<scheduler>.log`。清空主日志后再创建本轮 Job。Exporter 不再保存测试前参数；本轮结束后保持当前参数和 `1` 副本运行，下一轮开始时直接切换标签。
+Exporter 停止后再停止 API Server，并在其完全停止后删除集群主审计日志，使新 API Server 进程从新文件起点写入，避免保留旧文件 offset 形成 NUL 空洞，同时避免 Exporter 进程内 Counter/Histogram 和对象时间状态污染本轮。Kueue、Volcano、YuniKorn 分别生成独立 `cluster` 标签。源码不再创建 `./logs/kube-apiserver-audit.<scheduler>.log`。API Server 和 Exporter 就绪后再创建本轮 Job。Exporter 不再保存测试前参数；本轮结束后保持当前参数和 `1` 副本运行，下一轮开始时直接切换标签。
 
 ### 3.8 `test-batch-job-<scheduler>`
 

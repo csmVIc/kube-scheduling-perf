@@ -50,6 +50,9 @@ AUDIT_EXPORTER_NAMESPACE ?= kube-system
 AUDIT_EXPORTER_DEPLOYMENT ?= kube-apiserver-audit-exporter
 AUDIT_EXPORTER_CONTAINER ?= exporter
 AUDIT_EXPORTER_LOG_PATH ?= /var/log/kubernetes/kube-apiserver-audit.log
+KUBE_APISERVER_MANIFEST ?= /etc/kubernetes/manifests/kube-apiserver.yaml
+KUBE_APISERVER_MANIFEST_HOLD ?= /tmp/kube-apiserver.yaml.audit-reset
+KUBE_APISERVER_RESTART_TIMEOUT_SECONDS ?= 180
 
 IMAGE_PREFIX ?= 
 GO_IMAGE ?= $(IMAGE_PREFIX)docker.io/library/golang:1.25
@@ -212,7 +215,27 @@ reset-audit-exporter:
 	@test -n "$(SCHEDULER)" || (echo 'SCHEDULER is required' >&2; exit 1)
 	$(KUBECTL_CMD) scale deployment -n $(AUDIT_EXPORTER_NAMESPACE) $(AUDIT_EXPORTER_DEPLOYMENT) --replicas=0
 	$(MAKE) wait-deployment-replicas WAIT_DEPLOYMENTS='$(AUDIT_EXPORTER_NAMESPACE)/$(AUDIT_EXPORTER_DEPLOYMENT)=0'
-	docker exec $(CONTROL_PLANE_CONTAINER) sh -c 'true > $(AUDIT_EXPORTER_LOG_PATH)'
+	@set -eu; \
+	container='$(CONTROL_PLANE_CONTAINER)'; manifest='$(KUBE_APISERVER_MANIFEST)'; hold='$(KUBE_APISERVER_MANIFEST_HOLD)'; \
+	docker exec "$$container" test ! -e "$$hold"; \
+	docker exec "$$container" mv "$$manifest" "$$hold"; \
+	restore_manifest() { docker exec "$$container" sh -c 'if test -f "$$1"; then mv "$$1" "$$2"; fi' sh "$$hold" "$$manifest"; }; \
+	trap restore_manifest EXIT INT TERM; \
+	stopped=false; \
+	for attempt in $$(seq 1 $(KUBE_APISERVER_RESTART_TIMEOUT_SECONDS)); do \
+		if test -z "$$(docker exec "$$container" crictl ps --name kube-apiserver -q)"; then stopped=true; break; fi; \
+		sleep 1; \
+	done; \
+	if test "$$stopped" != true; then echo 'kube-apiserver did not stop' >&2; exit 1; fi; \
+	docker exec "$$container" rm -f '$(AUDIT_EXPORTER_LOG_PATH)'; \
+	restore_manifest; \
+	trap - EXIT INT TERM; \
+	ready=false; \
+	for attempt in $$(seq 1 $(KUBE_APISERVER_RESTART_TIMEOUT_SECONDS)); do \
+		if $(KUBECTL_CMD) get --raw=/readyz >/dev/null 2>&1; then ready=true; break; fi; \
+		sleep 1; \
+	done; \
+	if test "$$ready" != true; then echo 'kube-apiserver did not become ready' >&2; exit 1; fi
 	@patch="$$(jq -nc --arg container '$(AUDIT_EXPORTER_CONTAINER)' --arg log '$(AUDIT_EXPORTER_LOG_PATH)' --arg scheduler '$(SCHEDULER)' \
 		'{spec:{template:{spec:{containers:[{name:$$container,args:["--audit-log-path",$$log,"--cluster-label",$$scheduler]}]}}}}')"; \
 	$(KUBECTL_CMD) patch deployment -n $(AUDIT_EXPORTER_NAMESPACE) $(AUDIT_EXPORTER_DEPLOYMENT) --type=strategic -p "$$patch"
