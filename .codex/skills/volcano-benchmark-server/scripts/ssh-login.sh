@@ -7,13 +7,6 @@ fail() {
     exit 1
 }
 
-if [[ -z "${BENCHMARK_SERVER:-}" || -z "${BENCHMARK_SERVER_SECRET:-}" ]]; then
-    if [[ -z "${BENCHMARK_ENV_RELOADED:-}" ]] && command -v zsh >/dev/null 2>&1; then
-        export BENCHMARK_ENV_RELOADED=1
-        exec zsh -c 'source ~/.zshrc >/dev/null 2>&1; export BENCHMARK_SERVER BENCHMARK_SERVER_SECRET BENCHMARK_SERVER_USER; exec bash "$1"' _ "$0"
-    fi
-fi
-
 : "${BENCHMARK_SERVER:?BENCHMARK_SERVER not set}"
 : "${BENCHMARK_SERVER_SECRET:?BENCHMARK_SERVER_SECRET not set}"
 

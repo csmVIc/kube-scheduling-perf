@@ -19,7 +19,7 @@ Run from the repository root:
 bash .codex/skills/volcano-benchmark-server/scripts/ssh-login.sh
 ```
 
-The script opens an interactive SSH shell using the configured server. If the variables are absent from the current process, it reloads `~/.zshrc` once before validating them. Keep the session open while completing the authorized remote work, then exit with `exit` or Ctrl-D.
+The script opens an interactive SSH shell using the configured server. Keep the session open while completing the authorized remote work, then exit with `exit` or Ctrl-D.
 
 ## Rules
 
@@ -32,6 +32,6 @@ The script opens an interactive SSH shell using the configured server. If the va
 
 ## Implementation
 
-- The login script reads credentials only from the process environment, optionally reloading `~/.zshrc` once, and fails when required variables remain missing.
+- The login script reads credentials only from the process environment and fails when required variables are missing.
 - It uses `expect` only for initial password authentication, creates a temporary SSH control socket, and enables keepalive checks.
 - Host keys use `StrictHostKeyChecking=accept-new`; an existing changed host key still fails closed.
