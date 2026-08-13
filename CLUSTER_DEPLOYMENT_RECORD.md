@@ -173,7 +173,7 @@ etcd 数据位于 Kind 控制面容器对应的 Docker volume。执行 `kind del
 | Grafana Image Renderer | `v5.11.1` | `monitoring` | kube-prometheus-stack 的远程渲染子组件，版本由 values/Helm 参数固定 |
 | Traefik | chart `40.2.0` / app `v3.7.1` | `benchmark-grafana-ingress` | chart 先下载并校验，再从本地 tgz 安装；镜像固定 digest |
 | kube-state-metrics | `v2.19.1` | `monitoring` | kube-prometheus-stack 子组件 |
-| Audit Exporter | `v0.0.28` | `kube-system` | 本地维护 YAML apply，直接拉取自维护公开镜像 |
+| Audit Exporter | `v0.0.29` | `kube-system` | 本地维护 YAML apply，直接拉取自维护公开镜像 |
 | KWOK | `v0.7.0` | `kube-system` | 远程 URL 直接 apply |
 
 集群自带组件还包括 CoreDNS `v1.12.1`、kube-proxy `v1.34.8`、kindnet `v20260528-9350166c` 和 local-path-provisioner `v20260521-9fb22683`。
@@ -351,22 +351,20 @@ Grafana 启用了匿名 Viewer 和 `/grafana/` 子路径。`perf` Dashboard 由 
 
 ### Audit Exporter
 
-- 镜像：`ghcr.io/csmvic/kube-apiserver-audit-exporter:v0.0.28`
+- 镜像：`ghcr.io/csmvic/kube-apiserver-audit-exporter:v0.0.29`
 - Deployment：`kube-apiserver-audit-exporter`，`1` 副本
 - 从控制面宿主路径只读读取 `/var/log/kubernetes/kube-apiserver-audit.log`
 - ServiceMonitor 抓取间隔和超时均为 `100ms`，`honorLabels=false`，实验命名空间保存在 `exported_namespace`
 - 已验证指标包括 `pod_scheduling_latency_seconds`、`api_requests_total` 和仅统计 YuniKorn 实际工作 Pod 的 `yunikorn_workload_pods_scheduled_total`
 - Grafana Dashboard：`Scheduling Audit Overview`，UID `scheduling-audit-overview`
 
-源码运行性能实验时，会在截断审计日志前停止 Audit Exporter，并为 Kueue、Volcano、YuniKorn 分别以独立 `cluster` 标签启动全新进程。测试结束后先等待 Exporter 指标稳定，再确认 Prometheus 已抓取到晚于稳定时刻的样本，最后以毫秒时间窗采集结果；Exporter 保持本轮标签和 `1` 副本运行，下一轮开始时直接停止、清空日志并切换标签。这样常驻部署不依赖 overview 集群，也不会把进程内指标或文件 offset 混入下一轮。
+源码运行性能实验时，会先停止 Audit Exporter，再为 Kueue、Volcano、YuniKorn 分别以独立 `cluster` 标签和 `--start-at-end` 启动全新进程。新进程从当前审计文件末尾开始读取，不清空日志，也不重启 API Server。测试结束后先等待 Exporter 指标稳定，再确认 Prometheus 已抓取到晚于稳定时刻的样本，最后以毫秒时间窗采集结果；Exporter 保持本轮标签和 `1` 副本运行，下一轮开始时直接停止并切换标签。这样不会把历史事件、进程内指标或对象关联状态混入下一轮。
 
-Exporter 自 `v0.0.28` 起每 `100ms` 轮询一次审计文件，与 ServiceMonitor 的 `100ms` 抓取周期对齐；空闲轮询和常规处理完成日志只在 Debug 级别输出，文件截断和异常仍分别保留 Info、Error 级别。
+Exporter 自 `v0.0.28` 起每 `100ms` 轮询一次审计文件，与 ServiceMonitor 的 `100ms` 抓取周期对齐；空闲轮询和常规处理完成日志只在 Debug 级别输出。`v0.0.29` 新增从文件末尾启动，并通过文件身份识别运行期间的正常日志轮转：先读完旧文件尾部，再从新文件开头继续读取。
 
-### 审计日志稀疏文件风险（已观察）
+### 审计日志连续性
 
-当前实验通过截断正在由 API Server 写入的同一个审计文件来重置日志，但不会让 API Server 重新打开文件。历史完整测试曾观察到：API Server 保留旧文件 offset 后继续写入会形成带大段 NUL 空洞的稀疏文件，旧结果目录中复制的审计日志继承该问题。当前源码不再创建或归档每调度器审计日志，因此该问题只保留为集群主日志和历史结果的已知风险。
-
-因此，非空或表观大小很大的审计日志不等于完整有效的 JSON Lines 文件。后续分析必须先检查 NUL、首条有效 JSON 的偏移和记录连续性；不能只根据文件大小验收。Prometheus 抓取屏障通过只能证明 Exporter 指标已被抓取，不能替代原始审计文件完整性验证。该风险尚未修复。
+历史流程曾截断 API Server 正在写入的审计文件，造成带 NUL 空洞的稀疏文件。当前流程不再删除或截断主审计日志，也不为重置实验指标而重启 API Server；Exporter 通过 `--start-at-end` 隔离各轮历史事件。kube-apiserver 正常轮转日志时，Exporter 在运行期间连续读取旧文件尾部和新文件开头。
 
 ### 持久化风险
 
@@ -404,7 +402,7 @@ Exporter 自 `v0.0.28` 起每 `100ms` 轮询一次审计文件，与 ServiceMoni
 | Grafana Sidecar | `quay.io/kiwigrid/k8s-sidecar:2.10.0` | `sha256:21b9fe7bb29d65caf2445ccbf96ff6eda5e589a92bd8f5188f957fe75b551d72` |
 | Traefik | `docker.io/traefik:v3.7.1` | `sha256:6b9cbca6fac42ab0075f5437d8dc1685cfd188626d8d515839ea94f8b6271c42` |
 | kube-state-metrics | `registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.1` | `sha256:85108987d044b18a098126732f98602df408888c0f7d456241f5abefb9744bc1` |
-| Audit Exporter | `ghcr.io/csmvic/kube-apiserver-audit-exporter:v0.0.28` | `sha256:35af4b689d1dabb09490ab7f5f49b55af16a4be23a068cfcb2c7bca32eb84df9` |
+| Audit Exporter | `ghcr.io/csmvic/kube-apiserver-audit-exporter:v0.0.29` | `sha256:00f3e0cc955239969ccffbeac8a81a8e81563fd89052f85a8d8320ff590a1b34` |
 
 ## 12. 重建顺序
 
