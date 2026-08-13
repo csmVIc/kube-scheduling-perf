@@ -518,7 +518,7 @@ PNG 签名和 HTTP 200 都不能排除面板显示 `No data`。完整实验验�
 | `manifests/kueue-manager-config.yaml` | `4ef6994a2568fc4ad9b5aac90b27107cc3c985405810d274d99d70425497057a` |
 | `manifests/coscheduling-configmap.yaml` | `734c327e14ca405679e5bb57e875386aa11981e17dfbe7e22a3749b2efc4ebbe` |
 | `manifests/benchmark-namespaces.yaml` | `e766ab1fc5c3de100f727a5ac46fcaee8ae3e9d0eb9eb682c4769b715fbba74f` |
-| `manifests/audit-exporter.yaml` | `faa30a71d16ac8cfaecea99cc1e2705c393fba429c949026f91e500970fa5b0c` |
+| `manifests/audit-exporter.yaml` | `a29f2e4cfa796109942f3e4725c3eee02c5a81f912c9357a751bbe8b8bf3cf75` |
 | `manifests/audit-dashboard.yaml` | `558dfb641b07815b1dba8467a7939516be88ce3b07016f448d08e775c81d82fb` |
 | `manifests/perf-dashboard.json` | `df66405f2b9be9166cb1ed09cf9bf9ffc1e191deb6a2811fcf272cc5aaac188b` |
 | `manifests/scheduler-smoke-tests.yaml` | `8574169b65bd048ed085c344bdbf6650cae18773c44001a7bef1bfc0acd8aa45` |
