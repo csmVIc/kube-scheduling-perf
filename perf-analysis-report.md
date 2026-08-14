@@ -128,4 +128,8 @@
 
 ## 最终结果
 
-在所测试八个场景下，volcano表现较好，有其中5个场景（4 ~ 8）volcano是调度速度更快的那个，并且场景1三组调度器的调度速度几乎持平；但在非gang场景下
+在所测试八个场景下，volcano表现较好，有其中5个场景（4 ~ 8）volcano是调度速度更快的那个，并且场景1三组调度器的调度速度几乎持平；
+
+同时对于要求Gang调度的此时场景，Volcano的性能都是明显最佳的。
+
+报告链接🔗：https://github.com/songmingming0827/kube-scheduling-perf/blob/master/perf-analysis-report.md

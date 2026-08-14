@@ -952,3 +952,30 @@ T1 完成后 Wrapper 自动执行 `make down` 并返回 `0`，随后人工复核
 - Audit Exporter 当前继续以 `100ms/100ms`、`honorLabels=false` 运行；服务器仓库已快进到修复提交 `69142a9`。
 
 按既定“图片为非阻断观察项”的验收规则，本轮完整测试最终判定为通过：8 个场景、24/24 Case、24/24 指标屏障、8/8 元数据归档和最终固定基线恢复全部成功。单相对面板归档链路在标签修复后的场景 3–8 连续验证成功；场景 1–2 缺图及其基线不一致根因已完整记录并修复，没有扩大修改范围，也没有重复执行完整测试。
+
+## 22. 场景 7 YuniKorn 单轮性能离群记录
+
+### 22.1 现象
+
+在三轮完整性测试的场景 7（Gang，`20 Job × 500 Pod`）中，提交 `73eac2fc0abf67ba386eaeddd16f50b3f8820da3` 与 `344bcb6538488d708e19994733402b5e73aaca72` 的相对 Dashboard 结果基本一致；提交 `e4ffe56887784733ccdf02fc8496d58cc08269be` 中 YuniKorn Scheduled 曲线明显更晚开始增长，并在 Dashboard 截止时只显示较少的已调度工作 Pod。
+
+三轮 TestBatchJob 均通过，因此该现象不是 Case 失败。Dashboard 采用“第二套调度方案达到实际 `Scheduled=10000` 后 5 秒”作为截止时间，最慢的 YuniKorn 后续曲线会被截断；但 `e4ffe568` 与另外两轮的可见差异不能只由该截断规则解释。
+
+### 22.2 审计日志核对
+
+服务器保留的 API Server 审计日志完整覆盖 `e4ffe568` 和 `344bcb6` 两轮场景 7 的 YuniKorn Case。按 Pod 名称关联由 `kube-controller-manager` 创建的实际工作 Pod 和对应 `pods/binding` 事件后，得到：
+
+| 场景 7 YuniKorn | `e4ffe568` | `344bcb6` |
+| --- | ---: | ---: |
+| 创建完 10,000 个实际工作 Pod | `9.60s` | `10.27s` |
+| 首个实际工作 Pod binding 距首个工作 Pod 创建 | `33.11s` | `16.22s` |
+| 完成 10,000 个实际工作 Pod binding 距首个工作 Pod 创建 | `118.50s` | `92.02s` |
+| 10,000 个 placeholder binding 的执行跨度 | `107.54s` | `78.01s` |
+
+两轮审计日志中均存在完整的 10,000 个实际工作 Pod create、10,000 个实际工作 Pod binding 和 10,000 个 placeholder binding，没有发现审计事件丢失。Dashboard 曲线的时间和数量与原始审计事件一致。
+
+### 22.3 当前结论
+
+`e4ffe568` 的差异不是 Dashboard、Audit Exporter 或审计日志统计错误，也不是 Job Controller 创建工作 Pod 变慢；原始事件证明该轮 YuniKorn 的 placeholder 和实际工作 Pod binding 阶段确实更慢。现有三轮结果中只有 `e4ffe568` 出现该表现，因此当前将其记录为场景 7 YuniKorn 的单轮性能离群。
+
+审计日志只能定位到 YuniKorn 调度阶段，不能解释调度器内部为何该轮处理更慢；该轮 YuniKorn Scheduler 组件日志未保留，当前无法进一步确认内部根因。后续若再次出现同类离群，应在测试结束后立即保留对应的 YuniKorn Scheduler 日志，再结合审计事件分析。
