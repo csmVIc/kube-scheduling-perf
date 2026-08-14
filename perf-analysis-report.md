@@ -2,7 +2,7 @@
 
 ## 调度器版本
 
-![image-20260814102915994](/Users/csmvic/Library/Application Support/typora-user-images/image-20260814102915994.png)
+![image-20260814102915994](images/versions.png)
 
 ## 参数配置
 
@@ -20,7 +20,7 @@
 
 本次测试benchmark如下图，在10k总Pod量下，分别在启用/不启用**Gang** Scheduling的情况下，调整Job数量和每Job的Pod数量。
 
-![image-20260814103140184](/Users/csmvic/Library/Application Support/typora-user-images/image-20260814103140184.png)
+![image-20260814103140184](images/cases.png)
 
 ## 测试结果
 
@@ -32,7 +32,7 @@
 
 10000个job，每个Job只有1个Pod，有以下现象：
 
-![job-submission](/Users/csmvic/Downloads/volcano-versions/kube-scheduling-perf/results/scenario-1/job-submission.png)
+![job-submission](results/scenario-1/job-submission.png)
 
 - created和scheduled事件之间的差距很小，调度阶段不是主要瓶颈，此时性能**瓶颈为创建阶段**。
 
@@ -42,7 +42,7 @@
 
 500个job，每个Job有20个Pod，有以下现象：
 
-![job-submission](/Users/csmvic/Downloads/volcano-versions/kube-scheduling-perf/results/scenario-2/job-submission.png)
+![job-submission](results/scenario-2/job-submission.png)
 
 - Volcano的调度速度慢于另外两种调度器；
 - **scheduled明显滞后于created**，说明调度速度较慢，此时性能**瓶颈为调度**；
@@ -55,7 +55,7 @@
 
 20个job，每个Job有500个Pod，有以下现象：
 
-![job-submission](/Users/csmvic/Downloads/volcano-versions/kube-scheduling-perf/results/scenario-3/job-submission.png)
+![job-submission](results/scenario-3/job-submission.png)
 
 - Volcano的调度速度仍然慢于另外两种调度器；
 - scheduled仍然明显滞后于created，说明调度速度较慢，此时性能**瓶颈为主要是调度器**。
@@ -65,7 +65,7 @@
 
 只有1个job，每个Job有10000个Pod，有以下现象：
 
-![job-submission](/Users/csmvic/Downloads/volcano-versions/kube-scheduling-perf/results/scenario-4/job-submission.png)
+![job-submission](results/scenario-4/job-submission.png)
 
 - Volcano调度速度略快于另外两组调度器；
 - scheduled仍然明显滞后于created，说明调度速度较慢，此时性能瓶颈为主要是调度器。
@@ -82,18 +82,18 @@
 
 10000个job，每个Job只有1个Pod，有以下现象：
 
-![job-submission](/Users/csmvic/Downloads/volcano-versions/kube-scheduling-perf/results/scenario-5/job-submission.png)
+![job-submission](results/scenario-5/job-submission.png)
 
 - 和场景1类似，created和scheduled曲线重合，说明调度阶段不为瓶颈，此时**性能瓶颈为创建阶段**。
 - **volcano整体调度耗时接近100s**，和场景1耗时接近
 
-### 场景6
+### 场景6 🌟
 
 500个job，每个Job有20个Pod，有以下现象：
 
-![job-submission](/Users/csmvic/Downloads/volcano-versions/kube-scheduling-perf/results/scenario-6/job-submission.png)
+![job-submission](results/scenario-6/job-submission.png)
 
-![job-submission](/Users/csmvic/Downloads/volcano-versions/kube-scheduling-perf/results/scenario-2/job-submission.png)
+![job-submission](results/scenario-2/job-submission.png)
 
 - kueue、yunikorn和场景二的曲线几乎保持一致；不同的是**volcano调度速度明显变快**，从场景2的明显落后于另外两组调度器，到领先另外两组调度器；值得注意的是，**volcano在gang场景下创建pod的速度也变快了**。gang 并未直接优化 Pod 创建逻辑，分析可能的原因是调度请求更加批次化，**减少了与controller争用api-server的情况**，因此间接提高了创建吞吐量。
 - **volcano整体调度耗时20s**，和场景2耗时接近
@@ -102,20 +102,20 @@
 
 20个job，每个Job有500个Pod，有以下现象：
 
-![job-submission](/Users/csmvic/Downloads/volcano-versions/kube-scheduling-perf/results/scenario-7/job-submission.png)
+![job-submission](results/scenario-7/job-submission.png)
 
-![job-submission](/Users/csmvic/Downloads/volcano-versions/kube-scheduling-perf/results/scenario-3/job-submission.png)
+![job-submission](results/scenario-3/job-submission.png)
 
 - 整体created创建曲线和场景3类似，但是除volcano外，**另外两组调度器在gang场景下明显更慢**，yunikorn甚至直接超出画面；相反，**volcano在两种场景下调度速度接近**，因此能够超过kueue、yunikorn。
 - **volcano整体调度耗时接近30s**
   - 没有满足job越少，调度时间越短的的情况；可以看到，开始阶段scheduled的pod出现的很晚，推测原因可能是单个 Gang 较大，Scheduler 需要等待整组 Pod 准备并完成整体资源判断所花费较长时间；
   - volcano调度曲线 19:56:35 - 19:56:40所出现的**5s长阶梯**，可能和场景二的原因类似，创建阶段 Controller 分批处理、Webhook等 与 scheduler调度共同竞争 API Server所导致。
 
-### 场景8 🌟
+### 场景8 
 
 只有1个job，每个Job有10000个Pod，有以下现象：
 
-![job-submission](/Users/csmvic/Downloads/volcano-versions/kube-scheduling-perf/results/scenario-8/job-submission.png)
+![job-submission](results/scenario-8/job-submission.png)
 
 - created创建曲线和场景4类似，不过由于volcano调度器在gang场景下的优势，10000个pod全部被调度成功的速度最快
 - volcano整体调度耗时接近45s
