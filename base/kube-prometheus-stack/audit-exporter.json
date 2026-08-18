@@ -172,7 +172,7 @@
           "useBackend": false
         }
       ],
-      "title": "Total API Calls Group By (UserAgent, Verb, Resource)",
+      "title": "Total API Calls By (UserAgent, Verb, Resource)",
       "type": "timeseries"
     },
     {
@@ -182,6 +182,7 @@
       },
       "fieldConfig": {
         "defaults": {
+          "unit": "reqps",
           "color": {
             "mode": "palette-classic"
           },
@@ -281,6 +282,7 @@
           }
         ]
       },
+      "description": "Unit: API calls per second (calls/s).",
       "gridPos": {
         "h": 13,
         "w": 12,
@@ -326,7 +328,7 @@
           "useBackend": false
         }
       ],
-      "title": "API Calls Rate Group By (UserAgent, Verb, Resource)",
+      "title": "API Calls Rate By (UserAgent, Verb, Resource)",
       "type": "timeseries"
     },
     {
@@ -479,7 +481,7 @@
           "useBackend": false
         }
       ],
-      "title": "Total API Calls Group By UserAgent",
+      "title": "Total API Calls By UserAgent",
       "type": "timeseries"
     },
     {
@@ -489,6 +491,7 @@
       },
       "fieldConfig": {
         "defaults": {
+          "unit": "reqps",
           "color": {
             "mode": "palette-classic"
           },
@@ -588,6 +591,7 @@
           }
         ]
       },
+      "description": "Unit: API calls per second (calls/s).",
       "gridPos": {
         "h": 13,
         "w": 12,
@@ -633,7 +637,7 @@
           "useBackend": false
         }
       ],
-      "title": "API Calls Rate Group By UserAgent",
+      "title": "API Calls Rate By UserAgent",
       "type": "timeseries"
     },
     {
@@ -866,7 +870,7 @@
           "useBackend": false
         }
       ],
-      "title": "Pod Scheduling Latency Group By UserAgent",
+      "title": "Pod Scheduling Latency By UserAgent",
       "type": "timeseries"
     },
     {
@@ -1098,7 +1102,7 @@
           "useBackend": false
         }
       ],
-      "title": "BatchJob Completion Latency Group By UserAgent",
+      "title": "BatchJob Completion Latency By UserAgent",
       "type": "timeseries"
     },
     {
@@ -1428,7 +1432,7 @@
           "refId": "C"
         }
       ],
-      "title": "Total Pod Scheduled Group By UserAgent",
+      "title": "Total Pod Scheduled By UserAgent",
       "type": "timeseries"
     },
     {
@@ -1600,7 +1604,7 @@
           "useBackend": false
         }
       ],
-      "title": "Total BatchJob Completed Group By UserAgent",
+      "title": "Total BatchJob Completed By UserAgent",
       "type": "timeseries"
     }
   ],

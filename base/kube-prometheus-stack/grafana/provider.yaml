@@ -6,7 +6,7 @@ providers:
   folderUid: ''
   type: file
   disableDeletion: false
-  allowUiUpdates: false
+  allowUiUpdates: true
   updateIntervalSeconds: 30
   options:
     foldersFromFilesStructure: false
