@@ -182,7 +182,6 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "reqps",
           "color": {
             "mode": "palette-classic"
           },
@@ -491,7 +490,6 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "reqps",
           "color": {
             "mode": "palette-classic"
           },
