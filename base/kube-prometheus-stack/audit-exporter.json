@@ -1609,7 +1609,7 @@
     }
   ],
   "preload": true,
-  "refresh": "5s",
+  "refresh": "",
   "schemaVersion": 40,
   "tags": [
     "kube-apiserver-audit-exporter"
@@ -1838,7 +1838,7 @@
           "query": "label_values(api_requests_total,cluster)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
-        "refresh": 1,
+        "refresh": 2,
         "regex": "",
         "type": "query"
       }
