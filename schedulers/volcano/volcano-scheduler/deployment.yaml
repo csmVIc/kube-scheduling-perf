@@ -24,7 +24,7 @@ spec:
         - --leader-elect=false
         - --kube-api-qps=1000 # <--QPS
         - --kube-api-burst=1000 # <--QPS
-        - --schedule-period=1s
+        - --schedule-period=200ms
         - --node-worker-threads=20
         - -v=3
         - 2>&1
