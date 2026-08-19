@@ -9,6 +9,9 @@ nodes:
   image: localhost:5001/docker.io/kindest/node:v1.32.2
   kubeadmConfigPatches:
   - |-
+    kind: KubeletConfiguration
+    containerLogMaxSize: 500Mi
+  - |-
     kind: ClusterConfiguration
     controllerManager:
       extraArgs:
