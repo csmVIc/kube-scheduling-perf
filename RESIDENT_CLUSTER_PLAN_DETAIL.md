@@ -55,9 +55,31 @@ FORMAL_KWOK_NODES=1000
 
 完成后，源码中的 `save-result-images.sh` 不需要切换到其他端口。
 
-## 3. Makefile 方案细节
+## 3. 运行使用方式
 
-### 3.1 常驻集群参数
+完整运行八个场景和三个调度器：
+
+```bash
+make
+```
+
+运行单个场景和全部调度器：
+
+```bash
+make scenario-2
+```
+
+运行单个场景和单个调度器：
+
+```bash
+make scenario-2 SCHEDULERS=volcano
+```
+
+`scenario-1` 至 `scenario-8` 分别对应八个固定场景，`SCHEDULERS` 可选择 `kueue`、`volcano` 或 `yunikorn`。单调度器运行的指标仍由 Prometheus 采集并可在 Grafana 中查询，但不会更新三调度器相对 Dashboard；结果保存到 `results/selected/<scheduler>/scenario-<n>`，不会覆盖完整场景结果。
+
+## 4. Makefile 方案细节
+
+### 4.1 常驻集群参数
 
 在顶层 Makefile 中固定常驻集群操作入口：
 
@@ -73,7 +95,7 @@ MEMORY_PER_NODE = 64Gi
 
 `NODES_SIZE` 只用于记录实验环境规模，不再用于创建 Node。
 
-### 3.2 `make up`
+### 4.2 `make up`
 
 将顶层 `up` 改为常驻集群初始化检查：
 
@@ -88,7 +110,7 @@ MEMORY_PER_NODE = 64Gi
 
 `up` 不再创建集群、节点、调度器或监控组件。
 
-### 3.3 `up-<scheduler>`
+### 4.3 `up-<scheduler>`
 
 每轮不再保存调度组件副本数、当前调度器或 ConfigMap。`up-<scheduler>` 只将本轮目标组件设置为 `1` 副本、其他调度组件设置为 `0` 副本，等待状态收敛并清理对应测试资源；不重复应用任何调度器配置。实验配置统一由后续 `test-init-<scheduler>` 原地更新。
 
@@ -112,7 +134,7 @@ MEMORY_PER_NODE = 64Gi
 - 将 YuniKorn Scheduler 和 Admission 设置为 1，清理遗留测试资源但保留 ConfigMap
 - 等待非目标 Deployment 和 Pod 全部归零、目标组件 Ready
 
-### 3.4 `wait-<scheduler>`
+### 4.4 `wait-<scheduler>`
 
 删除原来等待临时集群所有 Pod Ready 的逻辑，改为只等待本轮必要组件。
 
@@ -135,7 +157,7 @@ MEMORY_PER_NODE = 64Gi
 
 除等待目标组件外，还必须确认全部非目标 Deployment 状态副本和对应 Pod 已归零；完成后再次确认 `1001/1001` Node Ready。
 
-### 3.5 `test-init-<scheduler>`
+### 4.5 `test-init-<scheduler>`
 
 继续执行现有 `TestInit`，但统一使用常驻集群 kubeconfig。
 
@@ -147,7 +169,7 @@ MEMORY_PER_NODE = 64Gi
 
 `TestInit` 不再创建 Node。
 
-### 3.6 `start-<scheduler>`
+### 4.6 `start-<scheduler>`
 
 保留现有执行结构：
 
@@ -156,7 +178,7 @@ MEMORY_PER_NODE = 64Gi
 
 两者统一使用常驻集群和常驻控制面容器。
 
-### 3.7 `reset-auditlog-<scheduler>`
+### 4.7 `reset-auditlog-<scheduler>`
 
 沿用当前源码的处理时机，不在 `make up` 中统一清理日志。每个目标在对应调度器任务开始前：
 
@@ -173,7 +195,7 @@ MEMORY_PER_NODE = 64Gi
 
 每轮使用全新的 Exporter 进程，使 Counter、Histogram 和对象关联状态从空状态开始；`--start-at-end` 跳过测试前已有的审计事件，因此无需清空日志或重启 API Server。运行期间发生 kube-apiserver 日志轮转时，Exporter 先读完旧文件尾部，再切换到新的主日志文件。Kueue、Volcano、YuniKorn 分别生成独立 `cluster` 标签。源码不创建 `./logs/kube-apiserver-audit.<scheduler>.log`。Exporter 本轮结束后保持当前参数和 `1` 副本运行，下一轮开始时直接切换标签。
 
-### 3.8 `test-batch-job-<scheduler>`
+### 4.8 `test-batch-job-<scheduler>`
 
 统一使用：
 
@@ -183,7 +205,7 @@ MEMORY_PER_NODE = 64Gi
 
 测试参数继续由 Makefile 传入，Job 只创建在对应测试命名空间。
 
-### 3.9 `end-<scheduler>`
+### 4.9 `end-<scheduler>`
 
 调整为：
 
@@ -194,7 +216,7 @@ MEMORY_PER_NODE = 64Gi
 
 本步骤不再复制或归档 API Server 审计日志。
 
-### 3.10 `down-<scheduler>`
+### 4.10 `down-<scheduler>`
 
 #### `down-kueue`
 
@@ -217,7 +239,7 @@ MEMORY_PER_NODE = 64Gi
 - 保留 `TestInit` 原地更新后的 `yunikorn-configs`
 - 将全部调度相关 Deployment 设置为 `1` 副本并等待 Ready
 
-### 3.11 顶层 `make down`
+### 4.11 顶层 `make down`
 
 将顶层 `down` 改为固定副本基线收敛入口：
 
@@ -230,7 +252,7 @@ MEMORY_PER_NODE = 64Gi
 
 `down` 不再移动结果目录，也不执行任何 Kind 集群删除操作。
 
-### 3.12 `serial-test`
+### 4.12 `serial-test`
 
 保留当前从 `prepare-<scheduler>` 开始的串行结构，不增加顶层 `make up` 调用。由于不再创建临时 Kind 集群，删除 `bin/kind` 前置依赖：
 
@@ -253,7 +275,7 @@ prepare-yunikorn
 start-yunikorn
 end-yunikorn
 
-update-relative-dashboard（仅完整场景或显式传入场景编号）
+update-relative-dashboard（仅本轮运行三个调度器时）
 save-result（等待 Dashboard 加载、保存单张图片和元数据）
 ```
 
@@ -263,7 +285,7 @@ save-result（等待 Dashboard 加载、保存单张图片和元数据）
 make down
 ```
 
-### 3.13 `save-result`
+### 4.13 `save-result`
 
 删除其中的：
 
@@ -273,13 +295,14 @@ make down
 
 `save-result` 只负责：
 
-- 当存在场景编号时，等待 Grafana Sidecar 加载本轮相对 Dashboard，并尝试保存其中的 `Job Submission — Created vs Scheduled` 面板；截图失败只告警，不改变测试结果
+- 完整运行三个调度器时，等待 Grafana Sidecar 加载本轮相对 Dashboard，并尝试保存其中的 `Job Submission — Created vs Scheduled` 面板；截图失败只告警，不改变测试结果
 - 保存 `envs.txt` 和完整串行实验的 `result-window.txt`
+- 单调度器结果写入 `results/selected/<scheduler>/scenario-<n>`，不生成相对 Dashboard 图片
 - 将单张图片和结果元数据写入独立 staging 目录后原子归档，不移动整个 `./tmp`
 
-## 4. Go 测试方案细节
+## 5. Go 测试方案细节
 
-### 4.1 限定测试命名空间
+### 5.1 限定测试命名空间
 
 固定使用：
 
@@ -291,25 +314,25 @@ make down
 
 所有 Job、LocalQueue、PodGroup 和其他 namespaced 测试资源都改到对应命名空间。
 
-### 4.2 调整完成等待逻辑
+### 5.2 调整完成等待逻辑
 
 `WaitDeployment` 增加目标 namespace 参数，只检查对应测试命名空间中带 `test-instance=1` 的 Pod，避免被其他调度器或历史资源干扰。
 
 `RestartDeployment` 使用 Pod template annotation 触发真实 rollout，并等待 generation 和 updated/ready/available replicas 全部收敛；原副本数为 0 时直接保持停用状态。
 
-## 5. Kueue 测试资源方案细节
+## 6. Kueue 测试资源方案细节
 
 - 测试资源使用 `kueue.x-k8s.io/v1beta2` API。
 - ClusterQueue 使用 `cohortName`，其 `namespaceSelector` 只匹配 `bench-kueue`。
 - Gang 场景继续通过 Coscheduling PodGroup 表达整组调度约束。
 
-## 6. Volcano 测试资源方案细节
+## 7. Volcano 测试资源方案细节
 
-### 6.1 专用父队列
+### 7.1 专用父队列
 
 不修改内置 `root` Queue。测试统一创建 `benchmark-root` 作为 `root` 的可回收子队列，将全部测试队列共享的 CPU 和内存总上限设置在该队列，并让所有 `test-queue-*` 以 `benchmark-root` 为父队列。
 
-### 6.2 Scheduler 配置
+### 7.2 Scheduler 配置
 
 - 固定 Actions：`enqueue`、`allocate`、`backfill`、`reclaim`
 - 固定 Plugins：第一层使用 `priority`，第二层使用 `predicates` 和 `capacity`；`capacity.enableHierarchy` 固定为 `true`
@@ -317,20 +340,20 @@ make down
 - Preemption 场景在 Actions 中增加 `preempt`
 - 仅在内容变化时原地更新 `volcano-scheduler-configmap` 并重启 Scheduler；内容一致时不操作
 
-## 7. YuniKorn 测试资源方案细节
+## 8. YuniKorn 测试资源方案细节
 
 - 调度配置保存在 `yunikorn` namespace 的 `yunikorn-configs` ConfigMap 中。
 - Job 保留 application ID、queue 和 gang scheduling annotations。
 
-## 8. 结果采集方案细节
+## 9. 结果采集方案细节
 
-### 8.1 结果图片与元数据归档
+### 9.1 结果图片与元数据归档
 
 每个场景的三套调度方案测试完成并生成相对 Dashboard 后，等待 Grafana API 返回与本轮一致的时间窗，再通过 `127.0.0.1:8080/grafana` 渲染相对 Dashboard。结果图片统一截取顶部场景说明和 `Job Submission — Created vs Scheduled` 两个面板，并保留固定的上下留白。原 `perf` Dashboard 继续在 Grafana 中展示，但不作为结果图片来源。
 
-结果目录固定为 `results/scenario-1` 至 `results/scenario-8`，每个目录直接保存一张 `job-submission.png`，以及本轮的 `envs.txt` 和 `result-window.txt`，不再创建 `output` 子目录。制品先写入独立 staging 目录，完成后原子替换对应场景的上一轮结果。完整 `make` 最终生成 8 个场景目录和 8 张图片；图片渲染失败只记录警告，不影响元数据和结果目录归档。
+完整测试结果目录固定为 `results/scenario-1` 至 `results/scenario-8`，每个目录直接保存一张 `job-submission.png`，以及本轮的 `envs.txt` 和 `result-window.txt`，不再创建 `output` 子目录。单调度器结果写入 `results/selected/<scheduler>/scenario-<n>`。制品先写入独立 staging 目录，完成后原子替换对应场景的上一轮结果。完整 `make` 最终生成 8 个场景目录和 8 张图片；图片渲染失败只记录警告，不影响元数据和结果目录归档。
 
-### 8.2 八个相对时间 Dashboard 模板
+### 9.2 八个相对时间 Dashboard 模板
 
 相对时间 Dashboard 模板用于将同一场景下 Kueue、Volcano 和 YuniKorn 的指标曲线放到统一时间轴上，直接比较三套调度方案的任务创建和调度速度。时间范围定义如下：
 
@@ -341,6 +364,6 @@ make down
 
 Audit Exporter 的 ServiceMonitor 抓取间隔和超时均为 `100ms`，并保持 `honorLabels=false`，使实验资源命名空间稳定写入 `exported_namespace`。原 `perf` Dashboard 的 8 个面板和相对 Dashboard 的 4 个指标面板最小查询步长均为 `100ms`；`rate` 计算窗口保持 `5s`，避免瞬时速率曲线过度抖动。
 
-仓库保存一份统一模板。默认完整 `make` 为八个场景依次传入场景编号；每个场景的三套调度方案全部成功后，根据本轮实际指标生成并更新对应 Dashboard，确认 Grafana 加载后再截图和归档。单调度器测试和单场景冒烟不会生成或覆盖这些 Dashboard。
+仓库保存一份统一模板。默认完整 `make` 为八个场景依次传入场景编号；每个场景的三套调度方案全部成功后，根据本轮实际指标生成并更新对应 Dashboard，确认 Grafana 加载后再截图和归档。单调度器测试不会生成或覆盖这些 Dashboard。
 
 八个场景统一更新 `scheduling-perf-relative-s1-s8` ConfigMap 中各自的 JSON。八个 Dashboard 的标签统一为 `benchmark`、`relative-time` 和各自的 `scenario-N`。Dashboard UID 固定为 `perf-relative-s1` 至 `perf-relative-s8`，继续支持 Scheduler 多选和 Grafana 原生时间缩放；原 `perf` Dashboard 不受影响。完整 `make` 全部成功时八个 Dashboard 均刷新为本轮数据，任一场景失败时不会为该失败场景生成配置。

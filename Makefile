@@ -34,7 +34,8 @@ MEMORY_LENDING_LIMIT ?=
 GANG ?= false
 PREEMPTION ?= false
 
-SCHEDULERS ?= kueue volcano yunikorn
+COMPARISON_SCHEDULERS := kueue volcano yunikorn
+SCHEDULERS ?= $(COMPARISON_SCHEDULERS)
 RELATIVE_DASHBOARD_SCENARIO ?=
 PROMETHEUS_URL ?= http://127.0.0.1:31003
 
@@ -60,6 +61,7 @@ GO_IN_DOCKER = docker run --rm --network host \
 	-e GOOS=$(GOOS) -e CGO_ENABLED=0 -e GOPATH=/workspace/gopath/ -e GOPROXY=$(GOPROXY) -e GOCACHE=/workspace/go-build $(GO_IMAGE)
 
 TEST_ENVS = \
+		SCHEDULERS="$(SCHEDULERS)" \
 		NODES_SIZE=$(NODES_SIZE) \
 		CPU_PER_NODE=$(CPU_PER_NODE) \
 		MEMORY_PER_NODE=$(MEMORY_PER_NODE) \
@@ -83,43 +85,74 @@ TEST_ENVS = \
 
 .PHONY: default
 default: ensure-directories
-	make serial-test \
+	$(MAKE) scenario-1
+	$(MAKE) scenario-2
+	$(MAKE) scenario-3
+	$(MAKE) scenario-4
+	$(MAKE) scenario-5
+	$(MAKE) scenario-6
+	$(MAKE) scenario-7
+	$(MAKE) scenario-8
+
+.PHONY: scenario-1
+scenario-1:
+	$(MAKE) serial-test \
 		RELATIVE_DASHBOARD_SCENARIO=1 \
 		TEST_TIMEOUT_SECONDS=350 \
 		NODES_SIZE=1000 \
 		QUEUES_SIZE=1  JOBS_SIZE_PER_QUEUE=10000  PODS_SIZE_PER_JOB=1
-	make serial-test \
+
+.PHONY: scenario-2
+scenario-2:
+	$(MAKE) serial-test \
 		RELATIVE_DASHBOARD_SCENARIO=2 \
 		TEST_TIMEOUT_SECONDS=200 \
 		NODES_SIZE=1000 \
 		QUEUES_SIZE=1  JOBS_SIZE_PER_QUEUE=500    PODS_SIZE_PER_JOB=20
-	make serial-test \
+
+.PHONY: scenario-3
+scenario-3:
+	$(MAKE) serial-test \
 		RELATIVE_DASHBOARD_SCENARIO=3 \
 		TEST_TIMEOUT_SECONDS=160 \
 		NODES_SIZE=1000 \
 		QUEUES_SIZE=1  JOBS_SIZE_PER_QUEUE=20     PODS_SIZE_PER_JOB=500
-	make serial-test \
+
+.PHONY: scenario-4
+scenario-4:
+	$(MAKE) serial-test \
 		RELATIVE_DASHBOARD_SCENARIO=4 \
 		TEST_TIMEOUT_SECONDS=190 \
 		NODES_SIZE=1000 \
 		QUEUES_SIZE=1  JOBS_SIZE_PER_QUEUE=1      PODS_SIZE_PER_JOB=10000
 
-	make serial-test \
+.PHONY: scenario-5
+scenario-5:
+	$(MAKE) serial-test \
 		RELATIVE_DASHBOARD_SCENARIO=5 \
 		TEST_TIMEOUT_SECONDS=430 \
 		NODES_SIZE=1000 GANG=true \
 		QUEUES_SIZE=1  JOBS_SIZE_PER_QUEUE=10000  PODS_SIZE_PER_JOB=1
-	make serial-test \
+
+.PHONY: scenario-6
+scenario-6:
+	$(MAKE) serial-test \
 		RELATIVE_DASHBOARD_SCENARIO=6 \
 		TEST_TIMEOUT_SECONDS=310 \
 		NODES_SIZE=1000 GANG=true \
 		QUEUES_SIZE=1  JOBS_SIZE_PER_QUEUE=500    PODS_SIZE_PER_JOB=20
-	make serial-test \
+
+.PHONY: scenario-7
+scenario-7:
+	$(MAKE) serial-test \
 		RELATIVE_DASHBOARD_SCENARIO=7 \
 		TEST_TIMEOUT_SECONDS=310 \
 		NODES_SIZE=1000 GANG=true \
 		QUEUES_SIZE=1  JOBS_SIZE_PER_QUEUE=20     PODS_SIZE_PER_JOB=500
-	make serial-test \
+
+.PHONY: scenario-8
+scenario-8:
+	$(MAKE) serial-test \
 		RELATIVE_DASHBOARD_SCENARIO=8 \
 		TEST_TIMEOUT_SECONDS=400 \
 		NODES_SIZE=1000 GANG=true \
@@ -470,7 +503,7 @@ serial-test: validate-result-scenario ensure-directories
 		$(MAKE) end-$(sched); \
 	)
 
-	@if test -n "$(RELATIVE_DASHBOARD_SCENARIO)"; then \
+	@if test "$(strip $(SCHEDULERS))" = "$(COMPARISON_SCHEDULERS)"; then \
 		$(MAKE) update-relative-dashboard SCENARIO="$(RELATIVE_DASHBOARD_SCENARIO)"; \
 	fi
 	$(MAKE) save-result
@@ -526,7 +559,7 @@ save-result: validate-result-scenario
 	mkdir -p ./tmp/result-staging
 	echo $(TEST_ENVS) > ./tmp/result-staging/envs.txt
 	printf 'from=%s\nto=%s\n' "$$(cat ./tmp/result-from-millis)" "$$(cat ./tmp/result-to-millis)" > ./tmp/result-staging/result-window.txt
-	@if test -n "$(RELATIVE_DASHBOARD_SCENARIO)"; then \
+	@if test "$(strip $(SCHEDULERS))" = "$(COMPARISON_SCHEDULERS)"; then \
 		if $(MAKE) bin/crop-dashboard-image && \
 			SCENARIO="$(RELATIVE_DASHBOARD_SCENARIO)" \
 			FROM="$$(cat ./tmp/relative-dashboard-from-millis)" \
@@ -542,9 +575,14 @@ save-result: validate-result-scenario
 			rm -f ./tmp/result-staging/job-submission.png; \
 		fi; \
 	fi
-	mkdir -p ./results
 	@set -eu; \
-		target="./results/scenario-$(RELATIVE_DASHBOARD_SCENARIO)"; \
+		if test "$(strip $(SCHEDULERS))" = "$(COMPARISON_SCHEDULERS)"; then \
+			target="./results/scenario-$(RELATIVE_DASHBOARD_SCENARIO)"; \
+		else \
+			scheduler_set="$$(printf '%s\n' "$(strip $(SCHEDULERS))" | tr ' ' '-')"; \
+			target="./results/selected/$$scheduler_set/scenario-$(RELATIVE_DASHBOARD_SCENARIO)"; \
+		fi; \
+		mkdir -p "$$(dirname "$$target")"; \
 		rm -rf -- "$$target"; \
 		mv ./tmp/result-staging "$$target"
 	rm -f ./tmp/result-from-millis ./tmp/result-to-millis
