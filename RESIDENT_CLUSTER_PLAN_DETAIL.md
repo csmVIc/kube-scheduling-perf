@@ -57,25 +57,79 @@ FORMAL_KWOK_NODES=1000
 
 ## 3. 运行使用方式
 
-完整运行八个场景和三个调度器：
+### 3.1 完整运行
+
+运行八个场景和三个调度器：
 
 ```bash
 make
 ```
 
-运行单个场景和全部调度器：
+`make` 依次调用 `scenario-1` 至 `scenario-8`。每个场景依次运行 Kueue、Volcano 和 YuniKorn，三个调度器均完成后生成相对 Dashboard、场景图片与元数据，并保存各调度器的 `window.txt` 和 `report.txt`。
+
+### 3.2 单场景运行
+
+运行一个场景和全部调度器：
 
 ```bash
 make scenario-2
 ```
 
-运行单个场景和单个调度器：
+该命令载入场景 2 的固定参数，再调用 `serial-test` 依次运行三个调度器。测试完成后更新场景 2 的相对 Dashboard 和完整场景结果，并分别保存：
+
+```text
+results/scenario-2/kueue/
+results/scenario-2/volcano/
+results/scenario-2/yunikorn/
+```
+
+### 3.3 单场景、单调度器运行
+
+例如只使用 Volcano 运行场景 2：
 
 ```bash
 make scenario-2 SCHEDULERS=volcano
 ```
 
-`scenario-1` 至 `scenario-8` 分别对应八个固定场景，`SCHEDULERS` 可选择 `kueue`、`volcano` 或 `yunikorn`。单调度器运行的指标仍由 Prometheus 采集并可在 Grafana 中查询，但不会更新三调度器相对 Dashboard；结果保存到 `results/selected/<scheduler>/scenario-<n>`，不会覆盖完整场景结果。
+执行顺序为：
+
+```text
+scenario-2
+└── serial-test
+    ├── prepare-volcano
+    │   ├── up-volcano
+    │   │   └── activate-volcano
+    │   ├── wait-volcano
+    │   │   └── wait-resident-volcano
+    │   └── test-init-volcano
+    ├── start-volcano
+    │   ├── reset-auditlog-volcano
+    │   ├── 记录 Volcano 指标起点
+    │   └── test-batch-job-volcano
+    ├── end-volcano
+    │   ├── wait-audit-metrics-scraped
+    │   ├── 记录 Volcano 指标终点
+    │   └── down-volcano
+    │       └── deactivate-volcano
+    │           ├── cleanup-volcano-resources
+    │           ├── enable-all-schedulers
+    │           └── wait-all-schedulers
+    └── save-scheduler-result
+```
+
+`up-volcano` 只启用 Volcano 并停用 Kueue、Coscheduling 和 YuniKorn；测试资源限定在 `bench-volcano`。Audit Exporter 使用 `cluster=volcano` 从当前审计日志末尾重新采集。`end-volcano` 确认最终指标已进入 Prometheus 后清理本轮资源并恢复全部调度组件。
+
+最后只更新：
+
+```text
+results/scenario-2/volcano/
+├── window.txt
+└── report.txt
+```
+
+不会更新三调度器相对 Dashboard，也不会覆盖 `results/scenario-2` 中已有的完整对比结果。将 `SCHEDULERS` 改为 `kueue` 或 `yunikorn` 时执行相同流程，并写入对应调度器目录。
+
+`scenario-1` 至 `scenario-8` 分别对应八个固定场景。运行异常中断后执行 `make down` 恢复常驻集群基线。
 
 ## 4. Makefile 方案细节
 
@@ -276,7 +330,8 @@ start-yunikorn
 end-yunikorn
 
 update-relative-dashboard（仅本轮运行三个调度器时）
-save-result（等待 Dashboard 加载、保存单张图片和元数据）
+save-result（仅本轮运行三个调度器时，保存 Dashboard 图片和元数据）
+save-scheduler-result（为本轮每个调度器保存时间窗口和统计报告）
 ```
 
 本轮不增加自动退出恢复机制。异常中断后由人工执行：
@@ -297,8 +352,20 @@ make down
 
 - 完整运行三个调度器时，等待 Grafana Sidecar 加载本轮相对 Dashboard，并尝试保存其中的 `Job Submission — Created vs Scheduled` 面板；截图失败只告警，不改变测试结果
 - 保存 `envs.txt` 和完整串行实验的 `result-window.txt`
-- 单调度器结果写入 `results/selected/<scheduler>/scenario-<n>`，不生成相对 Dashboard 图片
 - 将单张图片和结果元数据写入独立 staging 目录后原子归档，不移动整个 `./tmp`
+
+单调度器运行不调用 `save-result`，因此不会替换已有的完整场景目录。
+
+### 4.14 `save-scheduler-result`
+
+每个被选中的调度器完成后，根据 `result-<scheduler>-from-millis` 和 `result-<scheduler>-to-millis` 保存：
+
+- `window.txt`：使用 CST 的 `YYYY-MM-DD HH:MM:SS 至 YYYY-MM-DD HH:MM:SS` 格式记录本轮时间窗口
+- `report.txt`：保存 Pod 调度延迟 P50、P90、P99、实际调度 Pod 数、调度吞吐和吞吐时间窗
+
+延迟分位数和调度数量来自 Audit Exporter 的 Prometheus 指标；吞吐与 `volcano-ori/benchmark` 保持一致，按本轮时间窗口解析成功的 `pods/binding` 审计事件。`start-<scheduler>` 和 `end-<scheduler>` 同时记录审计文件字节位置，生成报告时只读取本轮新增的日志片段。YuniKorn 排除 `tg-` 开头的 placeholder Pod，并使用专用 Counter 记录实际工作 Pod 数。
+
+结果写入 `results/scenario-<n>/<scheduler>`。完整场景运行保存三个调度器目录；单调度器运行只原子替换本轮调度器目录，不修改同场景的其他结果。
 
 ## 5. Go 测试方案细节
 
@@ -351,7 +418,7 @@ make down
 
 每个场景的三套调度方案测试完成并生成相对 Dashboard 后，等待 Grafana API 返回与本轮一致的时间窗，再通过 `127.0.0.1:8080/grafana` 渲染相对 Dashboard。结果图片统一截取顶部场景说明和 `Job Submission — Created vs Scheduled` 两个面板，并保留固定的上下留白。原 `perf` Dashboard 继续在 Grafana 中展示，但不作为结果图片来源。
 
-完整测试结果目录固定为 `results/scenario-1` 至 `results/scenario-8`，每个目录直接保存一张 `job-submission.png`，以及本轮的 `envs.txt` 和 `result-window.txt`，不再创建 `output` 子目录。单调度器结果写入 `results/selected/<scheduler>/scenario-<n>`。制品先写入独立 staging 目录，完成后原子替换对应场景的上一轮结果。完整 `make` 最终生成 8 个场景目录和 8 张图片；图片渲染失败只记录警告，不影响元数据和结果目录归档。
+完整测试结果目录固定为 `results/scenario-1` 至 `results/scenario-8`，每个目录直接保存一张 `job-submission.png`、本轮的 `envs.txt` 和 `result-window.txt`，以及 `kueue`、`volcano`、`yunikorn` 三个调度器子目录。每个调度器子目录保存 `window.txt` 和 `report.txt`。完整场景制品先写入独立 staging 目录后原子替换；单调度器运行只原子替换对应调度器子目录，不覆盖完整对比结果。完整 `make` 最终生成 8 个场景目录、8 张图片和 24 组调度器报告；图片渲染失败只记录警告，不影响元数据和结果目录归档。
 
 ### 9.2 八个相对时间 Dashboard 模板
 

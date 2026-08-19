@@ -50,6 +50,7 @@ AUDIT_EXPORTER_NAMESPACE ?= kube-system
 AUDIT_EXPORTER_DEPLOYMENT ?= kube-apiserver-audit-exporter
 AUDIT_EXPORTER_CONTAINER ?= exporter
 AUDIT_EXPORTER_LOG_PATH ?= /var/log/kubernetes/kube-apiserver-audit.log
+AUDIT_REPORT_LOG_PATH ?= $(RESIDENT_DEPLOY_DIR)/logs/kube-apiserver-audit.log
 
 IMAGE_PREFIX ?= 
 GO_IMAGE ?= $(IMAGE_PREFIX)docker.io/library/golang:1.25
@@ -174,6 +175,7 @@ prepare-$(1):
 start-$(1):
 	make reset-auditlog-$(1)
 	mkdir -p ./tmp
+	wc -c < $(AUDIT_REPORT_LOG_PATH) > ./tmp/result-$(1)-audit-from-bytes
 	date +%s%3N > ./tmp/result-$(1)-from-millis
 	make test-batch-job-$(1)
 
@@ -181,8 +183,9 @@ start-$(1):
 end-$(1):
 	$(MAKE) wait-audit-metrics-scraped SCHEDULER=$(1)
 	mkdir -p ./tmp
-	@timestamp="$$$$(date +%s%3N)"; \
+	@timestamp="$$$$(date +%s%3N)"; audit_bytes="$$$$(wc -c < $(AUDIT_REPORT_LOG_PATH))"; \
 	printf '%s\n' "$$$$timestamp" > ./tmp/result-$(1)-to-millis; \
+	printf '%s\n' "$$$$audit_bytes" > ./tmp/result-$(1)-audit-to-bytes; \
 	printf '%s\n' "$$$$timestamp" > ./tmp/result-to-millis
 	$(MAKE) down-$(1)
 
@@ -494,7 +497,8 @@ serial-test: validate-result-scenario ensure-directories
 		./tmp/relative-dashboard-from-millis ./tmp/relative-dashboard-to-millis \
 		./tmp/relative-dashboard-from-iso ./tmp/relative-dashboard-to-iso
 	@for sched in $(SCHEDULERS); do \
-		rm -f "./tmp/result-$$sched-from-millis" "./tmp/result-$$sched-to-millis"; \
+		rm -f "./tmp/result-$$sched-from-millis" "./tmp/result-$$sched-to-millis" \
+			"./tmp/result-$$sched-audit-from-bytes" "./tmp/result-$$sched-audit-to-bytes"; \
 	done
 	date +%s%3N > ./tmp/result-from-millis
 	$(foreach sched,$(SCHEDULERS), \
@@ -505,11 +509,16 @@ serial-test: validate-result-scenario ensure-directories
 
 	@if test "$(strip $(SCHEDULERS))" = "$(COMPARISON_SCHEDULERS)"; then \
 		$(MAKE) update-relative-dashboard SCENARIO="$(RELATIVE_DASHBOARD_SCENARIO)"; \
+		$(MAKE) save-result; \
 	fi
-	$(MAKE) save-result
+	$(foreach sched,$(SCHEDULERS), \
+		$(MAKE) save-scheduler-result SCHEDULER=$(sched) SCENARIO=$(RELATIVE_DASHBOARD_SCENARIO); \
+	)
 	@for sched in $(SCHEDULERS); do \
-		rm -f "./tmp/result-$$sched-from-millis" "./tmp/result-$$sched-to-millis"; \
+		rm -f "./tmp/result-$$sched-from-millis" "./tmp/result-$$sched-to-millis" \
+			"./tmp/result-$$sched-audit-from-bytes" "./tmp/result-$$sched-audit-to-bytes"; \
 	done
+	rm -f ./tmp/result-from-millis ./tmp/result-to-millis
 	rm -f ./tmp/relative-dashboard-from-millis ./tmp/relative-dashboard-to-millis \
 		./tmp/relative-dashboard-from-iso ./tmp/relative-dashboard-to-iso
 
@@ -525,6 +534,36 @@ update-relative-dashboard:
 	KUBECTL="$(KUBECTL)" \
 	KUBECONFIG="$(KUBECONFIG)" \
 	./hack/update-relative-dashboard.sh
+
+.PHONY: save-scheduler-result
+save-scheduler-result:
+	@case "$(SCENARIO)" in \
+		1|2|3|4|5|6|7|8) ;; \
+		*) echo 'SCENARIO must be an integer from 1 to 8' >&2; exit 1;; \
+	esac
+	@case "$(SCHEDULER)" in \
+		kueue|volcano|yunikorn) ;; \
+		*) echo 'SCHEDULER must be kueue, volcano, or yunikorn' >&2; exit 1;; \
+	esac
+	test -s ./tmp/result-$(SCHEDULER)-from-millis
+	test -s ./tmp/result-$(SCHEDULER)-to-millis
+	test -s ./tmp/result-$(SCHEDULER)-audit-from-bytes
+	test -s ./tmp/result-$(SCHEDULER)-audit-to-bytes
+	test ! -e ./tmp/result-$(SCHEDULER)-staging || (echo 'Scheduler result staging already exists: ./tmp/result-$(SCHEDULER)-staging' >&2; exit 1)
+	mkdir -p ./tmp/result-$(SCHEDULER)-staging
+	SCHEDULER="$(SCHEDULER)" \
+	FROM_MILLIS="$$(cat ./tmp/result-$(SCHEDULER)-from-millis)" \
+	TO_MILLIS="$$(cat ./tmp/result-$(SCHEDULER)-to-millis)" \
+	AUDIT_FROM_BYTES="$$(cat ./tmp/result-$(SCHEDULER)-audit-from-bytes)" \
+	AUDIT_TO_BYTES="$$(cat ./tmp/result-$(SCHEDULER)-audit-to-bytes)" \
+	OUTPUT_DIR="$(CURDIR)/tmp/result-$(SCHEDULER)-staging" \
+	PROMETHEUS_URL="$(PROMETHEUS_URL)" \
+	AUDIT_LOG_PATH="$(AUDIT_REPORT_LOG_PATH)" \
+	./hack/save-scheduler-result.sh
+	@target="./results/scenario-$(SCENARIO)/$(SCHEDULER)"; \
+	mkdir -p "$$(dirname "$$target")"; \
+	rm -rf -- "$$target"; \
+	mv ./tmp/result-$(SCHEDULER)-staging "$$target"
 
 .PHONY: up-overview
 up-overview:
@@ -553,14 +592,14 @@ end-overview:
 
 .PHONY: save-result
 save-result: validate-result-scenario
+	test "$(strip $(SCHEDULERS))" = "$(COMPARISON_SCHEDULERS)"
 	test -s ./tmp/result-from-millis
 	test -s ./tmp/result-to-millis
 	test ! -e ./tmp/result-staging || (echo 'Result staging already exists: ./tmp/result-staging' >&2; exit 1)
 	mkdir -p ./tmp/result-staging
 	echo $(TEST_ENVS) > ./tmp/result-staging/envs.txt
 	printf 'from=%s\nto=%s\n' "$$(cat ./tmp/result-from-millis)" "$$(cat ./tmp/result-to-millis)" > ./tmp/result-staging/result-window.txt
-	@if test "$(strip $(SCHEDULERS))" = "$(COMPARISON_SCHEDULERS)"; then \
-		if $(MAKE) bin/crop-dashboard-image && \
+	@if $(MAKE) bin/crop-dashboard-image && \
 			SCENARIO="$(RELATIVE_DASHBOARD_SCENARIO)" \
 			FROM="$$(cat ./tmp/relative-dashboard-from-millis)" \
 			TO="$$(cat ./tmp/relative-dashboard-to-millis)" \
@@ -569,19 +608,13 @@ save-result: validate-result-scenario
 			OUTPUT_FILE="$(CURDIR)/tmp/result-staging/job-submission.png" \
 			./hack/save-relative-dashboard-image.sh; then \
 			:; \
-		else \
-			status=$$?; \
-			echo "warning: relative Dashboard image was not saved (exit $$status)" >&2; \
-			rm -f ./tmp/result-staging/job-submission.png; \
-		fi; \
+	else \
+		status=$$?; \
+		echo "warning: relative Dashboard image was not saved (exit $$status)" >&2; \
+		rm -f ./tmp/result-staging/job-submission.png; \
 	fi
 	@set -eu; \
-		if test "$(strip $(SCHEDULERS))" = "$(COMPARISON_SCHEDULERS)"; then \
-			target="./results/scenario-$(RELATIVE_DASHBOARD_SCENARIO)"; \
-		else \
-			scheduler_set="$$(printf '%s\n' "$(strip $(SCHEDULERS))" | tr ' ' '-')"; \
-			target="./results/selected/$$scheduler_set/scenario-$(RELATIVE_DASHBOARD_SCENARIO)"; \
-		fi; \
+		target="./results/scenario-$(RELATIVE_DASHBOARD_SCENARIO)"; \
 		mkdir -p "$$(dirname "$$target")"; \
 		rm -rf -- "$$target"; \
 		mv ./tmp/result-staging "$$target"

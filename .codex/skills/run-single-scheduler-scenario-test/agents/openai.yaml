@@ -1,0 +1,4 @@
+interface:
+  display_name: "运行单场景单调度器测试"
+  short_description: "在常驻基准集群运行指定场景与调度器并自动提交每轮测试结果"
+  default_prompt: "使用 $run-single-scheduler-scenario-test 运行指定场景和单个调度器，并自动提交本轮结果。"
