@@ -557,7 +557,6 @@ save-scheduler-result:
 	AUDIT_FROM_BYTES="$$(cat ./tmp/result-$(SCHEDULER)-audit-from-bytes)" \
 	AUDIT_TO_BYTES="$$(cat ./tmp/result-$(SCHEDULER)-audit-to-bytes)" \
 	OUTPUT_DIR="$(CURDIR)/tmp/result-$(SCHEDULER)-staging" \
-	PROMETHEUS_URL="$(PROMETHEUS_URL)" \
 	AUDIT_LOG_PATH="$(AUDIT_REPORT_LOG_PATH)" \
 	./hack/save-scheduler-result.sh
 	@target="./results/scenario-$(SCENARIO)/$(SCHEDULER)"; \

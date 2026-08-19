@@ -10,7 +10,6 @@ set -o pipefail
 : "${AUDIT_FROM_BYTES:?AUDIT_FROM_BYTES is required}"
 : "${AUDIT_TO_BYTES:?AUDIT_TO_BYTES is required}"
 : "${OUTPUT_DIR:?OUTPUT_DIR is required}"
-: "${PROMETHEUS_URL:?PROMETHEUS_URL is required}"
 : "${AUDIT_LOG_PATH:?AUDIT_LOG_PATH is required}"
 
 case "${SCHEDULER}" in
@@ -27,13 +26,11 @@ esac
 [[ -f "${AUDIT_LOG_PATH}" ]]
 
 command -v awk >/dev/null
-command -v curl >/dev/null
 command -v jq >/dev/null
 
 namespace="bench-${SCHEDULER}"
 from_seconds="$(awk -v value="${FROM_MILLIS}" 'BEGIN {printf "%.3f", value / 1000}')"
 to_seconds="$(awk -v value="${TO_MILLIS}" 'BEGIN {printf "%.3f", value / 1000}')"
-selector="cluster=\"${SCHEDULER}\", exported_namespace=\"${namespace}\""
 
 format_cst() {
   local millis="$1"
@@ -45,64 +42,9 @@ format_cst() {
   TZ=Asia/Shanghai date -r "${seconds}" '+%Y-%m-%d %H:%M:%S'
 }
 
-prometheus_query() {
-  local query="$1"
-
-  curl -fsS --get \
-    --data-urlencode "query=${query}" \
-    --data-urlencode "time=${to_seconds}" \
-    "${PROMETHEUS_URL%/}/api/v1/query" |
-    jq -ce 'if .status == "success" then .data.result else error("Prometheus query failed") end'
-}
-
-histogram_metric="pod_scheduling_latency_seconds_bucket{${selector}}"
-bucket_query="sum by (le) (${histogram_metric} and (timestamp(${histogram_metric}) >= ${from_seconds}))"
-buckets="$(prometheus_query "${bucket_query}" | jq -c '[.[] | {le: .metric.le, val: (.value[1] | tonumber)}]')"
-
-histogram_quantile() {
-  local quantile="$1"
-
-  jq -r --argjson quantile "${quantile}" '
-    sort_by(if .le == "+Inf" then 1e308 else (.le | tonumber) end) as $sorted |
-    ($sorted | last.val // 0) as $total |
-    if $total == 0 then "N/A"
-    else
-      ($quantile * $total) as $target |
-      $sorted | reduce .[] as $bucket (
-        {prev_le: 0, prev_count: 0, result: null};
-        if .result == null then
-          ($bucket.le | if . == "+Inf" then 1e308 else tonumber end) as $upper |
-          if $bucket.val >= $target then
-            if ($bucket.val - .prev_count) == 0 then
-              .result = $upper
-            else
-              .result = (.prev_le + ($upper - .prev_le) * ($target - .prev_count) / ($bucket.val - .prev_count))
-            end
-          else
-            .prev_le = $upper |
-            .prev_count = $bucket.val
-          end
-        else . end
-      ) | .result // "N/A"
-    end
-  ' <<<"${buckets}"
-}
-
-p50="$(histogram_quantile 0.5)"
-p90="$(histogram_quantile 0.9)"
-p99="$(histogram_quantile 0.99)"
-
-if [[ "${SCHEDULER}" == "yunikorn" ]]; then
-  scheduled_metric="yunikorn_workload_pods_scheduled_total{${selector}}"
-  scheduled_query="sum(${scheduled_metric} and (timestamp(${scheduled_metric}) >= ${from_seconds}))"
-  scheduled="$(prometheus_query "${scheduled_query}" | jq -r 'if length == 0 then 0 else (.[0].value[1] | tonumber | round) end')"
-else
-  scheduled="$(jq -r 'map(select(.le == "+Inf"))[0].val // 0 | round' <<<"${buckets}")"
-fi
-
 audit_bytes=$((AUDIT_TO_BYTES - AUDIT_FROM_BYTES))
 set +o pipefail
-throughput_stats="$(
+audit_stats="$(
   tail -c "+$((AUDIT_FROM_BYTES + 1))" "${AUDIT_LOG_PATH}" |
   head -c "${audit_bytes}" |
   jq -Rnc \
@@ -123,41 +65,78 @@ throughput_stats="$(
         0
       ] | mktime) + (($t.frac // "0") | tonumber);
 
-    reduce (
+    def nearest_rank($sorted; $quantile):
+      if ($sorted | length) == 0 then null
+      else $sorted[((($sorted | length) * $quantile | ceil) - 1)]
+      end;
+
+    (reduce (
       inputs |
       fromjson? |
       select(.stage == "ResponseComplete") |
       select(.verb == "create") |
       select(.objectRef.resource == "pods") |
-      select(.objectRef.subresource == "binding") |
       select(.objectRef.namespace == $namespace) |
       select((.responseStatus.code // 0) >= 200 and (.responseStatus.code // 0) < 300) |
       select($scheduler != "yunikorn" or ((.objectRef.name // "") | startswith("tg-") | not)) |
-      (.stageTimestamp | ts_epoch) |
-      select(. >= $before and . <= $after)
-    ) as $timestamp (
-      {count: 0, first: null, last: null};
-      .count += 1 |
-      .first = if .first == null or $timestamp < .first then $timestamp else .first end |
-      .last = if .last == null or $timestamp > .last then $timestamp else .last end
-    ) |
-    if .count < 2 then
-      {count: .count, window_seconds: null, pods_per_second: null}
-    else
-      (.last - .first) as $window |
       {
-        count: .count,
+        name: .objectRef.name,
+        subresource: (.objectRef.subresource // ""),
+        timestamp: (.stageTimestamp | ts_epoch)
+      } |
+      select(.timestamp >= $before and .timestamp <= $after) |
+      select(.subresource == "" or .subresource == "binding")
+    ) as $event (
+      {created: {}, bound: {}};
+      if $event.subresource == "binding" then
+        .bound[$event.name] = $event.timestamp
+      else
+        .created[$event.name] = $event.timestamp
+      end
+    )) as $events |
+    ($events.bound | to_entries | map(.value)) as $binding_times |
+    ($events.bound | to_entries | map(
+      select($events.created[.key] != null) |
+      (.value - $events.created[.key]) |
+      select(. >= 0)
+    ) | sort) as $latencies |
+    ($binding_times | length) as $binding_count |
+    ($latencies | length) as $paired_count |
+    if $binding_count == 0 then
+      error("no successful pod binding events found in the result window")
+    elif $paired_count != $binding_count then
+      error("pod create/binding event count mismatch: bindings=\($binding_count), paired=\($paired_count)")
+    elif $binding_count < 2 then
+      {
+        count: $binding_count,
+        p50: nearest_rank($latencies; 0.50),
+        p90: nearest_rank($latencies; 0.90),
+        p99: nearest_rank($latencies; 0.99),
+        window_seconds: null,
+        pods_per_second: null
+      }
+    else
+      (($binding_times | max) - ($binding_times | min)) as $window |
+      {
+        count: $binding_count,
+        p50: nearest_rank($latencies; 0.50),
+        p90: nearest_rank($latencies; 0.90),
+        p99: nearest_rank($latencies; 0.99),
         window_seconds: (($window * 1000 | round) / 1000),
-        pods_per_second: ((.count / $window * 100 | round) / 100)
+        pods_per_second: (($binding_count / $window * 100 | round) / 100)
       }
     end
   '
 )"
 set -o pipefail
 
-throughput="$(jq -r '.pods_per_second // "N/A"' <<<"${throughput_stats}")"
-throughput_window="$(jq -r '.window_seconds // "N/A"' <<<"${throughput_stats}")"
-binding_count="$(jq -r '.count' <<<"${throughput_stats}")"
+p50="$(jq -r '.p50' <<<"${audit_stats}")"
+p90="$(jq -r '.p90' <<<"${audit_stats}")"
+p99="$(jq -r '.p99' <<<"${audit_stats}")"
+scheduled="$(jq -r '.count' <<<"${audit_stats}")"
+throughput="$(jq -r '.pods_per_second // "N/A"' <<<"${audit_stats}")"
+throughput_window="$(jq -r '.window_seconds // "N/A"' <<<"${audit_stats}")"
+binding_count="${scheduled}"
 
 fmt_ms() {
   local value="$1"
