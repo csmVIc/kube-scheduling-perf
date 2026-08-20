@@ -117,7 +117,7 @@ scenario-2
     └── save-scheduler-result
 ```
 
-`up-volcano` 只启用 Volcano 并停用 Kueue、Coscheduling 和 YuniKorn；测试资源限定在 `bench-volcano`。Audit Exporter 使用 `cluster=volcano` 从当前审计日志末尾重新采集。`end-volcano` 确认最终指标已进入 Prometheus 后清理本轮资源并恢复全部调度组件。
+`up-volcano` 停用 Kueue、Coscheduling 和 YuniKorn，将 Volcano Deployment 设置为 1 副本后统一重启并等待新 Pod Ready；测试资源限定在 `bench-volcano`。Audit Exporter 使用 `cluster=volcano` 从当前审计日志末尾重新采集。`end-volcano` 确认最终指标已进入 Prometheus 后清理本轮资源并恢复全部调度组件。
 
 最后只更新：
 
@@ -166,27 +166,31 @@ MEMORY_PER_NODE = 64Gi
 
 ### 4.3 `up-<scheduler>`
 
-每轮不再保存调度组件副本数、当前调度器或 ConfigMap。`up-<scheduler>` 只将本轮目标组件设置为 `1` 副本、其他调度组件设置为 `0` 副本，等待状态收敛并清理对应测试资源；不重复应用任何调度器配置。实验配置统一由后续 `test-init-<scheduler>` 原地更新。
+每轮不再保存调度组件副本数、当前调度器或 ConfigMap。`up-<scheduler>` 将本轮目标组件设置为 `1` 副本后对其全部 Deployment 执行 `rollout restart`，将其他调度组件设置为 `0` 副本，等待新 Pod Ready、旧 Pod 和非目标 Pod 全部退出，再清理对应测试资源；不重复应用任何调度器配置。实验配置统一由后续 `test-init-<scheduler>` 原地更新。
 
 #### `up-kueue`
 
 - 将 Volcano 和 YuniKorn 相关 Deployment 缩容到 0
 - 将 Kueue Controller、Coscheduling Scheduler 和 Controller 恢复到 1
-- 等待非目标 Deployment 和 Pod 全部归零、目标组件 Ready
+- 重启 Kueue Controller、Coscheduling Scheduler 和 Controller
+- 等待非目标 Deployment 和 Pod 全部归零、目标新 Pod Ready 且旧 Pod 完全退出
 - 清理上次遗留的 Kueue、Coscheduling 测试资源并确认零残留
 
 #### `up-volcano`
 
 - 将 Kueue、Coscheduling 和 YuniKorn 相关 Deployment 缩容到 0
 - 将 Volcano Scheduler、Controller 和 Admission 恢复到 1
-- 等待非目标 Deployment 和 Pod 全部归零、目标组件 Ready
+- 重启 Volcano Scheduler、Controller 和 Admission
+- 等待非目标 Deployment 和 Pod 全部归零、目标新 Pod Ready 且旧 Pod 完全退出
 - 清理上次遗留的 Volcano 测试资源并确认零残留
 
 #### `up-yunikorn`
 
 - 将 Volcano、Kueue 和 Coscheduling 相关 Deployment 缩容到 0
-- 将 YuniKorn Scheduler 和 Admission 设置为 1，清理遗留测试资源但保留 ConfigMap
-- 等待非目标 Deployment 和 Pod 全部归零、目标组件 Ready
+- 将 YuniKorn Scheduler 和 Admission 设置为 1，并保留 ConfigMap
+- 重启 YuniKorn Scheduler 和 Admission
+- 等待非目标 Deployment 和 Pod 全部归零、目标新 Pod Ready 且旧 Pod 完全退出
+- 清理上次遗留的 YuniKorn 测试资源并确认零残留
 
 ### 4.4 `wait-<scheduler>`
 

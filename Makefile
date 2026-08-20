@@ -233,10 +233,10 @@ wait-deployment-replicas:
 			for attempt in $$(seq 1 300); do \
 				object="$$( $(KUBECTL_CMD) get deployment -n "$$namespace" "$$name" -o json )"; \
 				selector="$$(printf '%s' "$$object" | jq -r '.spec.selector.matchLabels | to_entries | map("\(.key)=\(.value)") | join(",")')"; \
-				pods="$$( $(KUBECTL_CMD) get pods -n "$$namespace" -l "$$selector" -o name )"; \
+				pod_count="$$( $(KUBECTL_CMD) get pods -n "$$namespace" -l "$$selector" -o json | jq '.items | length' )"; \
 				if printf '%s' "$$object" | jq -e --argjson expected "$$expected" \
 					'(.spec.replicas // 1) == $$expected and (.status.observedGeneration // 0) >= .metadata.generation and (.status.replicas // 0) == $$expected and (.status.readyReplicas // 0) == $$expected and (.status.availableReplicas // 0) == $$expected and (.status.updatedReplicas // 0) == $$expected' >/dev/null && \
-					{ test "$$expected" != 0 || test -z "$$pods"; }; then ready=true; break; fi; \
+					test "$$pod_count" = "$$expected"; then ready=true; break; fi; \
 				sleep 1; \
 			done; \
 			if test "$$ready" != true; then echo "Deployment did not converge: $$ref=$$expected" >&2; exit 1; fi; \
@@ -402,6 +402,8 @@ activate-kueue:
 	$(KUBECTL_CMD) scale deployment -n yunikorn yunikorn-scheduler yunikorn-admission-controller --replicas=0
 	$(KUBECTL_CMD) scale deployment -n kueue-system kueue-controller-manager --replicas=1
 	$(KUBECTL_CMD) scale deployment -n coscheduling coscheduling scheduler-plugins-controller --replicas=1
+	$(KUBECTL_CMD) rollout restart -n kueue-system deployment/kueue-controller-manager
+	$(KUBECTL_CMD) rollout restart -n coscheduling deployment/coscheduling deployment/scheduler-plugins-controller
 	$(MAKE) wait-deployment-replicas WAIT_DEPLOYMENTS='kueue-system/kueue-controller-manager=1 coscheduling/coscheduling=1 coscheduling/scheduler-plugins-controller=1 volcano-system/volcano-scheduler=0 volcano-system/volcano-controllers=0 volcano-system/volcano-admission=0 yunikorn/yunikorn-scheduler=0 yunikorn/yunikorn-admission-controller=0'
 	$(MAKE) cleanup-kueue-resources
 
@@ -411,6 +413,7 @@ activate-volcano:
 	$(KUBECTL_CMD) scale deployment -n coscheduling coscheduling scheduler-plugins-controller --replicas=0
 	$(KUBECTL_CMD) scale deployment -n yunikorn yunikorn-scheduler yunikorn-admission-controller --replicas=0
 	$(KUBECTL_CMD) scale deployment -n volcano-system volcano-scheduler volcano-controllers volcano-admission --replicas=1
+	$(KUBECTL_CMD) rollout restart -n volcano-system deployment/volcano-scheduler deployment/volcano-controllers deployment/volcano-admission
 	$(MAKE) wait-deployment-replicas WAIT_DEPLOYMENTS='kueue-system/kueue-controller-manager=0 coscheduling/coscheduling=0 coscheduling/scheduler-plugins-controller=0 volcano-system/volcano-scheduler=1 volcano-system/volcano-controllers=1 volcano-system/volcano-admission=1 yunikorn/yunikorn-scheduler=0 yunikorn/yunikorn-admission-controller=0'
 	$(MAKE) cleanup-volcano-resources
 
@@ -420,6 +423,7 @@ activate-yunikorn:
 	$(KUBECTL_CMD) scale deployment -n kueue-system kueue-controller-manager --replicas=0
 	$(KUBECTL_CMD) scale deployment -n coscheduling coscheduling scheduler-plugins-controller --replicas=0
 	$(KUBECTL_CMD) scale deployment -n yunikorn yunikorn-scheduler yunikorn-admission-controller --replicas=1
+	$(KUBECTL_CMD) rollout restart -n yunikorn deployment/yunikorn-scheduler deployment/yunikorn-admission-controller
 	$(MAKE) wait-deployment-replicas WAIT_DEPLOYMENTS='kueue-system/kueue-controller-manager=0 coscheduling/coscheduling=0 coscheduling/scheduler-plugins-controller=0 volcano-system/volcano-scheduler=0 volcano-system/volcano-controllers=0 volcano-system/volcano-admission=0 yunikorn/yunikorn-scheduler=1 yunikorn/yunikorn-admission-controller=1'
 	$(MAKE) cleanup-yunikorn-resources
 
