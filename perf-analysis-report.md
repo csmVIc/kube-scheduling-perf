@@ -4,9 +4,29 @@
 
 ![image-20260814102915994](images/versions.png)
 
-## 参数配置
+## 参数配置	
 
-统一了各组件客户端限流配置，QPS/Burst=1000/1000，尽量保证比较公平
+| 对比方案        | 组件与作用                       | CPU request/limit | Kubernetes client QPS/Burst                               | 并发或Worker                                      | 调度周期                      |
+| --------------- | -------------------------------- | ----------------- | --------------------------------------------------------- | ------------------------------------------------- | ----------------------------- |
+| Kueue 非 Gang   | `kube-scheduler`                 | `1 / 8`           | `1000/1000`                                               | /                                                 | 事件驱动，无固定调度周期      |
+| Kueue 准入      | `kueue-controller-manager`       | `500m / 8`        | `1000/1000`                                               | job、workload等worker均为100                      |                               |
+| Kueue Gang      | `coscheduling`，实际调度 Pod     | `500m / 8`        | `1000/1000`                                               | /                                                 | 事件驱动，无固定调度周期      |
+| Kueue Gang 辅助 | `scheduler-plugins-controller`   | `500m / 8`        | 配置是`1000/1000`，但配置未生效，结果是无限制             | workers=100                                       |                               |
+| Volcano         | Scheduler、Controller、Admission | `500m / 8`        | `1000/1000`（controller 中配置 volcano client 1000/1000） | Controller 的 Job、GC、PodGroup Worker 均为 100； | 显式配置 --schedule-period=1s |
+| YuniKorn        | Scheduler                        | `500m / 8`        | `1000/1000`                                               | /                                                 | 1s（默认值）                  |
+| YuniKorn        | Admission Controller             | `500m / 8`        | `1000/1000`                                               | /                                                 |                               |
+| YuniKorn        | kube-controller-manager          | `1 / 8`           | **`5000/10000`**                                          | Job Controller Worker=100                         |                               |
+
+> Scheduler Node Worker=20 表示 Volcano Scheduler 启动 20 个 Go worker，并发消费 Node 事件队列，把节点新增、更新、删除等变化同步到调度器缓存中
+>
+> Job Controller Worker=100 表示 启动 100 个并发 worker，最多同时协调约 100 个不同的 Kubernetes Job
+
+### volcano配置
+
+- 固定 Actions：`enqueue`、`allocate`、`backfill`、`reclaim`
+- 固定 Plugins：第一层使用 `priority`，第二层使用 `predicates` 和 `capacity`；`capacity.enableHierarchy` 固定为 `true`
+- Gang 场景在第一层增加 `gang`，并设置 `enablePreemptable: false`
+- Preemption 场景在 Actions 中增加 `preempt`
 
 ## 数据收集方法优化
 
@@ -15,6 +35,8 @@
 使用经过版本优化过后的开源测试工具 **kube-scheduling-perf** 获得测试结果。
 
 # 测试
+
+测试结果图来自：http://104.105.137.213:31005/grafana
 
 ## 测试cases
 
@@ -34,9 +56,13 @@
 
 ![job-submission](results/scenario-1/job-submission.png)
 
-- created和scheduled事件之间的差距很小，调度阶段不是主要瓶颈，此时性能**瓶颈为创建阶段**。
+- created和scheduled曲线基本重合，调度阶段不是主要瓶颈，此时性能**瓶颈为创建阶段**。
+  - 原因：**k8s客户端的qps/burst为100/200**；提交时以job为整体单位提交，故提交耗时最少要(10000 - Burst 200) / QPS 100 ≈ 98 秒。
+    - vc-controller创建pod耗时被掩盖：vc-controller的qps/burst为1000/1000，故创建耗时最少要(10000 - Burst 1000) / QPS 1000 ≈ 9 秒。同理vc-Admission ≈ 9 秒。
 
-- **volcano整体调度耗时100s**
+    - 由于客户端的qps，导致**pod创建速度**因j提交限制到了100pod/s，scheduler的qps是1000所以处理速度大于pod创建速度，所以曲线重合
+
+- **volcano整体耗时100s**
 
 ### 场景2
 
@@ -45,11 +71,22 @@
 ![job-submission](results/scenario-2/job-submission.png)
 
 - Volcano的调度速度慢于另外两种调度器；
+- **创建时间**比场景一更快
+  - 客户端qps/burst为100/200，这里只有500个job，提交耗时会更少，最少要(500 - Burst 200) / QPS 100 ≈ 3 秒。
+  - vc-controller的k8s client qps/burst为1000/1000，需要创建10000，创建最少耗时为（10000 - Burst1000）/ QPS 1000 ≈ 9 秒。**提交时间 < 创建时间**，所以这里提交时间几乎不影响创建pod的时间。
+    - 但是由于有500个job，导致会vc-controller在创建podgroup，更新job时花费过多时间，导致整体pod创建时间增多，这里甚至可能达不到k8s client的qps限流
+  - 提示：这里由于设置失误，kube-manager-controller的qps/burst设置为了5000/10000，导致yunikorn的创建时间小于9s。
+
+- **created阶段性突变**现象（正常情况下created应该匀速增加，这里的现象说明controller创建pod时会间歇性卡住一会儿）。
+  - **vc-controller的worker为100**，所以worker一起工作时能够处理100个job，故最多能产出2000个pod，开始时burst=200，所有worker一起开始工作，进度几乎一样，所以可以看到pod在**2000和4000左右会有“停滞”**，随着时间推移，各个worker工作进度不同，**错峰执行**，整个pod的产出曲线就变的**平滑**了；
+    - 同时各个worker错峰，会使创建pod的时间更分散，这样controller的qps/burst(1000/1000)的等待时间就会变少甚至没有，所以可以看到后**半程创建300个job的时间比前面200个job甚至更短**。
+
 - **scheduled明显滞后于created**，说明调度速度较慢，此时性能**瓶颈为调度**；
-- created阶段性突变现象（正常情况下created应该匀速增加，这里的现象说明controller会间歇性卡住一会儿）。可能的原因是Controller 分批处理，以及 create、Webhook 和 scheduler **共同竞争** API Server 导致。
-  - Volcano 的 500 个 `Job` 由 Volcano Job Controller 创建；每个 Pod 需要经过 Volcano 的 mutating 和 validating 两个 admission webhook。同时 Volcano 在 Pod 创建尚未结束时，Scheduler 已开始为已创建的 Pod 调度。大量 `CREATE Pod`、Webhook 请求、`UPDATE Job/PodGroup` 和 调度器调度 同时冲击同一个 API Server/etcd，因此曲线出现停顿和分段突增。
-  - Kueue 和 YuniKorn 都提交原生 `Job`，实际 Pod 由 Kubernetes Controller Manager 创建；Kueue 没有 Volcano 那套 Pod admission 链路，YuniKorn 的路径也更轻。
-- **volcano调度整体耗时25s**
+  - 原因是**scheduler的处理速度 < pod创建速度**；
+  - scheduler整体耗时 = 调度器执行时间 + 周期等待时间
+    - **周期等待时间**：调度周期为1秒，经历x轮调度就会额外增加x-1秒的周期等待时间；**调度器的执行时间**：scheduler执行action、plugin所花费的时间，例如节点过滤、评分和Binding等；（scheduler的qps为1000，所以理论上最快的处理速度是（10000 - burst 1000）/ qps 1000 = 9秒，整体调度时间远大于9s，所以qps几乎不会限制scheduler的处理速度。）
+
+- **volcano整体耗时接近22s**，创建耗时15s，调度耗时20s
 
 ### 场景3
 
@@ -57,9 +94,12 @@
 
 ![job-submission](results/scenario-3/job-submission.png)
 
-- Volcano的调度速度仍然慢于另外两种调度器；
-- scheduled仍然明显滞后于created，说明调度速度较慢，此时性能**瓶颈为主要是调度器**。
-- volcano整体调度耗时20s
+- volcano**创建**pod速度比场景2更快
+  - 由于job数量变少，创建podgroup和更新job状态不再限制pod的创建，所以volcano-client大概率能产出大量pod创建请求，能够打满k8s-client qps 1000的设置，所以这里pod创建时间在9s左右基本符合预期。
+    - VC Controller的Kubernetes Client主要用于Pod创建，Job/PodGroup及Pod状态更新由其他客户端承担。例如：Job、PodGroup状态：VC Controller的volcano-client；Binding及部分调度状态：Volcano Scheduler自己的k8s-client；
+
+- scheduled仍然明显滞后于created，说明**调度**速度较慢，此时性能**瓶颈为主要是调度器**。
+- **volcano整体耗时接近20s**，创建耗时9s，调度耗时18s
 
 ### 场景4
 
@@ -67,14 +107,20 @@
 
 ![job-submission](results/scenario-4/job-submission.png)
 
-- Volcano调度速度略快于另外两组调度器；
-- scheduled仍然明显滞后于created，说明调度速度较慢，此时性能瓶颈为主要是调度器。
-- **volcano整体调度耗时接近20s**
+- **Volcano调度速度，创建速度几乎不变；**
+- yunikorn和kueue由创建速度变慢导致整体时间变长。
+  - 场景3创建时间为11、5 =》18、18
+
+- **volcano整体耗时接近18s**，创建耗时9s，调度耗时17s。
 
 #### 总结
 
 1. 整体耗时大致呈现 pod总数一定的情况下，job数量越少，调度越快的趋势；Volcano 的总调度时间基本与 Job 数量成正比，说明其性能**瓶颈主要由 Job 导致**。
+   1. job越少，vc-client的压力越少，越能更快的提交创建pod请求。
+
 2. 当job数量越少，也就是job包含的pod数量越多，此时，scheduled会呈现明显滞后于created的情况，说明此时整体的**性能瓶颈在调度器**。（如图场景2-场景4）
+   1. scheduler调度速度 < pod创建速度
+
 
 ## gang场景
 

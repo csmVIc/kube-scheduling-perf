@@ -434,3 +434,102 @@ Audit Exporter 的 ServiceMonitor 抓取间隔和超时均为 `100ms`，并保�
 仓库保存一份统一模板。默认完整 `make` 为八个场景依次传入场景编号；每个场景的三套调度方案全部成功后，根据本轮实际指标生成并更新对应 Dashboard，确认 Grafana 加载后再截图和归档。单调度器测试不会生成或覆盖这些 Dashboard。
 
 八个场景统一更新 `scheduling-perf-relative-s1-s8` ConfigMap 中各自的 JSON。八个 Dashboard 的标签统一为 `benchmark`、`relative-time` 和各自的 `scenario-N`。Dashboard UID 固定为 `perf-relative-s1` 至 `perf-relative-s8`，继续支持 Scheduler 多选和 Grafana 原生时间缩放；原 `perf` Dashboard 不受影响。完整 `make` 全部成功时八个 Dashboard 均刷新为本轮数据，任一场景失败时不会为该失败场景生成配置。
+
+# 附录
+
+## 1. 完整的“提交 VC Job 到创建出 Pod”链路是：
+
+```
+提交 Volcano Job
+  → kube-apiserver
+  → Volcano Admission：/jobs/mutate，/jobs/validate
+  → 写入 etcd
+  → Volcano Job Informer 发现 Job，Volcano Job 进入 WorkQueue
+  → vc controller初始化 Job Status，通过 kube-apiserver 创建 PodGroup
+  → Volcano Scheduler 将 PodGroup 推进到 Inqueue
+  → VC Job Controller 并发调用 kube-apiserver CREATE Pod
+  → Volcano Admission：/pods/mutate，/pods/validate
+  → 写入 etcd
+  → Pod 创建完成，进入 Pending/等待调度状态
+```
+
+## 2. 原生 Kubernetes Job 创建 Pod 的流程是：
+
+```
+提交 batch/v1 Job
+→ kube-apiserver
+→ Admission（内置准入及已注册的 Webhook）
+→ 写入 etcd
+→ kube-controller-manager 的 Job Controller 通过 Informer 发现 Job, Job 进入 Controller WorkQueue
+→ Job Controller 分批/并发调用 kube-apiserver CREATE Pod
+→ Pod Admission
+→ 写入 etcd
+→ Pod 创建完成，进入 Pending
+→ Scheduler 调度并 Binding
+```
+
+## 3. volcano调度周期
+
+Volcano 一轮调度的核心范围是：
+
+```
+OpenSession
+→ 依次执行 enqueue / allocate / backfill 等 Action
+→ CloseSession
+```
+
+当前代码使用：
+
+```
+wait.Until(pc.runOnce, pc.schedulePeriod, stopCh)
+```
+
+而 `wait.Until` 是滑动周期：在 `runOnce` 完全结束后才开始计算等待时间。因此默认 `schedule-period=1s` 的含义就是：
+
+```
+本轮CloseSession结束
+→ 等待1秒
+→ 下一轮开始
+```
+
+## 4. Volcano Controller分别创建Kubernetes Client和Volcano Client
+
+虽然只有一组启动参数：
+
+```
+--kube-api-qps=1000
+--kube-api-burst=1000
+```
+
+但Controller用这个配置分别创建两个Client：[server.go (line 143)](/Users/csmvic/Downloads/volcano-versions/volcano/cmd/controller-manager/app/server.go:143)
+
+```
+KubeClient    = kubeclientset.NewForConfigOrDie(config)
+VolcanoClient = vcclientset.NewForConfigOrDie(config)
+```
+
+每次`NewForConfig`都会基于相同的`QPS/Burst`分别创建一个令牌桶，所以实际是：
+
+```
+Kubernetes Client
+QPS/Burst = 1000/1000
+用于Pod、Service、ConfigMap等原生资源
+
+Volcano Client
+QPS/Burst = 1000/1000
+用于Volcano Job、PodGroup、Queue等CRD
+```
+
+两个令牌桶相互独立，不是共同分享1000 QPS。理论上：
+
+```
+Kube Client请求上限     ≈ 1000 QPS
+Volcano Client请求上限  ≈ 1000 QPS
+```
+
+## 5. volcano使用了reclaim、backfill
+
+在场景 2、3 的非 Gang、资源充足且无队列争抢条件下：
+
+- `reclaim` 基本没有实际回收工作，主要增加一次扫描。
+- `backfill` 通常也只产生少量额外遍历。
