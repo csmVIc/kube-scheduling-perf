@@ -7,7 +7,9 @@ set -o pipefail
 : "${SCHEDULER:?SCHEDULER is required}"
 : "${FROM_MILLIS:?FROM_MILLIS is required}"
 : "${TO_MILLIS:?TO_MILLIS is required}"
+: "${AUDIT_FROM_INODE:?AUDIT_FROM_INODE is required}"
 : "${AUDIT_FROM_BYTES:?AUDIT_FROM_BYTES is required}"
+: "${AUDIT_TO_INODE:?AUDIT_TO_INODE is required}"
 : "${AUDIT_TO_BYTES:?AUDIT_TO_BYTES is required}"
 : "${OUTPUT_DIR:?OUTPUT_DIR is required}"
 : "${AUDIT_LOG_PATH:?AUDIT_LOG_PATH is required}"
@@ -19,10 +21,11 @@ esac
 
 [[ "${FROM_MILLIS}" =~ ^[0-9]{13}$ ]]
 [[ "${TO_MILLIS}" =~ ^[0-9]{13}$ ]]
+[[ "${AUDIT_FROM_INODE}" =~ ^[0-9]+$ ]]
 [[ "${AUDIT_FROM_BYTES}" =~ ^[0-9]+$ ]]
+[[ "${AUDIT_TO_INODE}" =~ ^[0-9]+$ ]]
 [[ "${AUDIT_TO_BYTES}" =~ ^[0-9]+$ ]]
 ((FROM_MILLIS < TO_MILLIS))
-((AUDIT_FROM_BYTES <= AUDIT_TO_BYTES))
 [[ -f "${AUDIT_LOG_PATH}" ]]
 
 command -v awk >/dev/null
@@ -42,11 +45,55 @@ format_cst() {
   TZ=Asia/Shanghai date -r "${seconds}" '+%Y-%m-%d %H:%M:%S'
 }
 
-audit_bytes=$((AUDIT_TO_BYTES - AUDIT_FROM_BYTES))
+file_inode() {
+  local path="$1"
+
+  if stat -c %i "${path}" 2>/dev/null; then
+    return
+  fi
+  stat -f %i "${path}"
+}
+
+find_audit_file() {
+  local expected_inode="$1"
+  local candidate
+
+  while IFS= read -r -d '' candidate; do
+    if [[ "$(file_inode "${candidate}")" == "${expected_inode}" ]]; then
+      printf '%s\n' "${candidate}"
+      return
+    fi
+  done < <(find "$(dirname "${AUDIT_LOG_PATH}")" -maxdepth 1 -type f -print0)
+
+  printf 'audit file with inode %s is unavailable\n' "${expected_inode}" >&2
+  return 1
+}
+
+audit_from_file="$(find_audit_file "${AUDIT_FROM_INODE}")"
+audit_to_file="$(find_audit_file "${AUDIT_TO_INODE}")"
+audit_from_file_bytes="$(wc -c <"${audit_from_file}")"
+audit_to_file_bytes="$(wc -c <"${audit_to_file}")"
+
+((AUDIT_FROM_BYTES <= audit_from_file_bytes))
+((AUDIT_TO_BYTES <= audit_to_file_bytes))
+if [[ "${AUDIT_FROM_INODE}" == "${AUDIT_TO_INODE}" ]]; then
+  ((AUDIT_FROM_BYTES <= AUDIT_TO_BYTES))
+fi
+
+stream_audit_window() {
+  if [[ "${AUDIT_FROM_INODE}" == "${AUDIT_TO_INODE}" ]]; then
+    tail -c "+$((AUDIT_FROM_BYTES + 1))" "${audit_from_file}" |
+      head -c "$((AUDIT_TO_BYTES - AUDIT_FROM_BYTES))"
+    return
+  fi
+
+  tail -c "+$((AUDIT_FROM_BYTES + 1))" "${audit_from_file}"
+  head -c "${AUDIT_TO_BYTES}" "${audit_to_file}"
+}
+
 set +o pipefail
 audit_stats="$(
-  tail -c "+$((AUDIT_FROM_BYTES + 1))" "${AUDIT_LOG_PATH}" |
-  head -c "${audit_bytes}" |
+  stream_audit_window |
   jq -Rnc \
     --arg scheduler "${SCHEDULER}" \
     --arg namespace "${namespace}" \

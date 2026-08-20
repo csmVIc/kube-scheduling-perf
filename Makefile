@@ -175,7 +175,9 @@ prepare-$(1):
 start-$(1):
 	make reset-auditlog-$(1)
 	mkdir -p ./tmp
-	wc -c < $(AUDIT_REPORT_LOG_PATH) > ./tmp/result-$(1)-audit-from-bytes
+	@audit_identity="$$$$(stat -c '%i %s' $(AUDIT_REPORT_LOG_PATH))"; \
+	printf '%s\n' "$$$${audit_identity%% *}" > ./tmp/result-$(1)-audit-from-inode; \
+	printf '%s\n' "$$$${audit_identity##* }" > ./tmp/result-$(1)-audit-from-bytes
 	date +%s%3N > ./tmp/result-$(1)-from-millis
 	make test-batch-job-$(1)
 
@@ -183,9 +185,10 @@ start-$(1):
 end-$(1):
 	$(MAKE) wait-audit-metrics-scraped SCHEDULER=$(1)
 	mkdir -p ./tmp
-	@timestamp="$$$$(date +%s%3N)"; audit_bytes="$$$$(wc -c < $(AUDIT_REPORT_LOG_PATH))"; \
+	@timestamp="$$$$(date +%s%3N)"; audit_identity="$$$$(stat -c '%i %s' $(AUDIT_REPORT_LOG_PATH))"; \
 	printf '%s\n' "$$$$timestamp" > ./tmp/result-$(1)-to-millis; \
-	printf '%s\n' "$$$$audit_bytes" > ./tmp/result-$(1)-audit-to-bytes; \
+	printf '%s\n' "$$$${audit_identity%% *}" > ./tmp/result-$(1)-audit-to-inode; \
+	printf '%s\n' "$$$${audit_identity##* }" > ./tmp/result-$(1)-audit-to-bytes; \
 	printf '%s\n' "$$$$timestamp" > ./tmp/result-to-millis
 	$(MAKE) down-$(1)
 
@@ -502,7 +505,8 @@ serial-test: validate-result-scenario ensure-directories
 		./tmp/relative-dashboard-from-iso ./tmp/relative-dashboard-to-iso
 	@for sched in $(SCHEDULERS); do \
 		rm -f "./tmp/result-$$sched-from-millis" "./tmp/result-$$sched-to-millis" \
-			"./tmp/result-$$sched-audit-from-bytes" "./tmp/result-$$sched-audit-to-bytes"; \
+			"./tmp/result-$$sched-audit-from-inode" "./tmp/result-$$sched-audit-from-bytes" \
+			"./tmp/result-$$sched-audit-to-inode" "./tmp/result-$$sched-audit-to-bytes"; \
 	done
 	date +%s%3N > ./tmp/result-from-millis
 	$(foreach sched,$(SCHEDULERS), \
@@ -520,7 +524,8 @@ serial-test: validate-result-scenario ensure-directories
 	)
 	@for sched in $(SCHEDULERS); do \
 		rm -f "./tmp/result-$$sched-from-millis" "./tmp/result-$$sched-to-millis" \
-			"./tmp/result-$$sched-audit-from-bytes" "./tmp/result-$$sched-audit-to-bytes"; \
+			"./tmp/result-$$sched-audit-from-inode" "./tmp/result-$$sched-audit-from-bytes" \
+			"./tmp/result-$$sched-audit-to-inode" "./tmp/result-$$sched-audit-to-bytes"; \
 	done
 	rm -f ./tmp/result-from-millis ./tmp/result-to-millis
 	rm -f ./tmp/relative-dashboard-from-millis ./tmp/relative-dashboard-to-millis \
@@ -551,14 +556,18 @@ save-scheduler-result:
 	esac
 	test -s ./tmp/result-$(SCHEDULER)-from-millis
 	test -s ./tmp/result-$(SCHEDULER)-to-millis
+	test -s ./tmp/result-$(SCHEDULER)-audit-from-inode
 	test -s ./tmp/result-$(SCHEDULER)-audit-from-bytes
+	test -s ./tmp/result-$(SCHEDULER)-audit-to-inode
 	test -s ./tmp/result-$(SCHEDULER)-audit-to-bytes
 	test ! -e ./tmp/result-$(SCHEDULER)-staging || (echo 'Scheduler result staging already exists: ./tmp/result-$(SCHEDULER)-staging' >&2; exit 1)
 	mkdir -p ./tmp/result-$(SCHEDULER)-staging
 	SCHEDULER="$(SCHEDULER)" \
 	FROM_MILLIS="$$(cat ./tmp/result-$(SCHEDULER)-from-millis)" \
 	TO_MILLIS="$$(cat ./tmp/result-$(SCHEDULER)-to-millis)" \
+	AUDIT_FROM_INODE="$$(cat ./tmp/result-$(SCHEDULER)-audit-from-inode)" \
 	AUDIT_FROM_BYTES="$$(cat ./tmp/result-$(SCHEDULER)-audit-from-bytes)" \
+	AUDIT_TO_INODE="$$(cat ./tmp/result-$(SCHEDULER)-audit-to-inode)" \
 	AUDIT_TO_BYTES="$$(cat ./tmp/result-$(SCHEDULER)-audit-to-bytes)" \
 	OUTPUT_DIR="$(CURDIR)/tmp/result-$(SCHEDULER)-staging" \
 	AUDIT_LOG_PATH="$(AUDIT_REPORT_LOG_PATH)" \
@@ -567,6 +576,10 @@ save-scheduler-result:
 	mkdir -p "$$(dirname "$$target")"; \
 	rm -rf -- "$$target"; \
 	mv ./tmp/result-$(SCHEDULER)-staging "$$target"
+
+.PHONY: test-save-scheduler-result
+test-save-scheduler-result:
+	./hack/test-save-scheduler-result.sh
 
 .PHONY: up-overview
 up-overview:

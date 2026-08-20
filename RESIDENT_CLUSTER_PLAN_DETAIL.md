@@ -367,7 +367,9 @@ make down
 - `window.txt`：使用 CST 的 `YYYY-MM-DD HH:MM:SS 至 YYYY-MM-DD HH:MM:SS` 格式记录本轮时间窗口
 - `report.txt`：保存 Pod 调度延迟 P50、P90、P99、实际调度 Pod 数、调度吞吐和吞吐时间窗
 
-延迟分位数和调度数量来自 Audit Exporter 的 Prometheus 指标；吞吐与 `volcano-ori/benchmark` 保持一致，按本轮时间窗口解析成功的 `pods/binding` 审计事件。`start-<scheduler>` 和 `end-<scheduler>` 同时记录审计文件字节位置，生成报告时只读取本轮新增的日志片段。YuniKorn 排除 `tg-` 开头的 placeholder Pod，并使用专用 Counter 记录实际工作 Pod 数。
+延迟分位数、调度数量和吞吐均直接来自本轮原始审计事件，不使用 Prometheus Histogram 估算。脚本按 Pod 名称配对成功的 `pods` create 与 `pods/binding` 事件，以精确时间戳计算每个 Pod 的创建到绑定延迟，排序后使用 nearest-rank 计算 P50、P90、P99；吞吐按成功 binding 数除以第一和最后 binding 的时间差计算。YuniKorn 排除 `tg-` 开头的 placeholder Pod。Audit Exporter 的 Prometheus 指标继续用于抓取屏障和 Dashboard 展示。
+
+`start-<scheduler>` 和 `end-<scheduler>` 同时记录审计文件 inode 与字节位置。inode 相同时，报告脚本读取同一文件的起止字节区间；测试期间发生一次 kube-apiserver 审计日志轮转时，脚本按起始 inode 找到已轮转文件，拼接旧文件尾部与新文件头部后统一解析。因此正常的单次轮转不会再导致报告保存失败。
 
 结果写入 `results/scenario-<n>/<scheduler>`。完整场景运行保存三个调度器目录；单调度器运行只原子替换本轮调度器目录，不修改同场景的其他结果。
 
