@@ -19,7 +19,10 @@ func TestBatchJob(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = utils.WaitDeployment(t.Context(), utils.Resources, "bench-yunikorn")
+	err = utils.WaitJobsCompleted(t.Context(), utils.Resources, "bench-yunikorn",
+		provider.QueueSize*provider.JobsSizePerQueue+
+			provider.ImpactingQueuesSize*provider.ImpactingJobsSizePerQueue+
+			provider.CriticalQueuesSize*provider.CriticalJobsSizePerQueue)
 	if err != nil {
 		t.Fatal(err)
 	}

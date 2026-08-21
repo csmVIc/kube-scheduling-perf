@@ -11,6 +11,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -146,29 +147,36 @@ func RestartDeployment(ctx context.Context, r *resources.Resources, name, namesp
 	return nil
 }
 
-func WaitDeployment(ctx context.Context, r *resources.Resources, namespace string) error {
+func WaitJobsCompleted(ctx context.Context, r *resources.Resources, namespace string, expected int) error {
 	namespacedResources, err := resources.New(r.GetConfig())
 	if err != nil {
 		return err
 	}
 	namespacedResources.WithNamespace(namespace)
 
-	var pods corev1.PodList
-	return wait.For(func(context.Context) (done bool, err error) {
-		err = namespacedResources.List(ctx, &pods,
-			resources.WithLabelSelector(`test-instance == 1`),
-			func(lo *metav1.ListOptions) {
-				lo.Limit = 1
-			},
-		)
-		if err != nil {
+	return wait.For(func(ctx context.Context) (bool, error) {
+		var jobs batchv1.JobList
+		if err := namespacedResources.List(ctx, &jobs); err != nil {
 			return false, err
 		}
-		return len(pods.Items) == 0, nil
-	},
-		wait.WithInterval(10*time.Second),
-		wait.WithTimeout(1*time.Hour),
-	)
+		if len(jobs.Items) != expected {
+			return false, nil
+		}
+
+		for i := range jobs.Items {
+			completed := false
+			for _, condition := range jobs.Items[i].Status.Conditions {
+				if condition.Type == batchv1.JobComplete && condition.Status == corev1.ConditionTrue {
+					completed = true
+					break
+				}
+			}
+			if !completed {
+				return false, nil
+			}
+		}
+		return true, nil
+	}, wait.WithInterval(10*time.Second), wait.WithTimeout(time.Hour))
 }
 
 func TimesQuantity(q resource.Quantity, t int) *resource.Quantity {

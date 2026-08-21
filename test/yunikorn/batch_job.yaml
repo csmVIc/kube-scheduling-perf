@@ -5,7 +5,6 @@ metadata:
   namespace: bench-yunikorn
 spec:
   backoffLimit: 1
-  ttlSecondsAfterFinished: 1
   parallelism: #{{ .size }}
   completions: #{{ .size }}
   template:

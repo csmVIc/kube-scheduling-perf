@@ -328,7 +328,7 @@ wait-no-kueue-namespaced-resources:
 
 .PHONY: cleanup-volcano-resources
 cleanup-volcano-resources:
-	$(KUBECTL_CMD) delete jobs.batch.volcano.sh --all -n bench-volcano --ignore-not-found --timeout=5m
+	$(KUBECTL_CMD) delete jobs.batch.volcano.sh --all -n bench-volcano --ignore-not-found --wait=false
 	$(KUBECTL_CMD) delete pods --all -n bench-volcano --ignore-not-found --force --grace-period=0 --wait=false
 	@set -eu; \
 		resources="$$( $(KUBECTL_CMD) get queues.scheduling.volcano.sh -o name )"; \
@@ -342,8 +342,8 @@ cleanup-volcano-resources:
 
 .PHONY: cleanup-yunikorn-resources
 cleanup-yunikorn-resources:
-	$(KUBECTL_CMD) delete jobs.batch --all -n bench-yunikorn --ignore-not-found --timeout=5m
-	$(KUBECTL_CMD) delete pods --all -n bench-yunikorn --ignore-not-found --force --grace-period=0 --timeout=5m
+	$(KUBECTL_CMD) delete jobs.batch --all -n bench-yunikorn --ignore-not-found --wait=false
+	$(KUBECTL_CMD) delete pods --all -n bench-yunikorn --ignore-not-found --force --grace-period=0 --wait=false
 	$(MAKE) assert-no-yunikorn-resources
 
 .PHONY: assert-no-kueue-resources

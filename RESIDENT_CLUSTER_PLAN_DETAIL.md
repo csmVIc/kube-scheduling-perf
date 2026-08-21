@@ -286,14 +286,18 @@ MEMORY_PER_NODE = 64Gi
 
 #### `down-volcano`
 
-- 删除 `bench-volcano` 中的 Volcano Job 和 Pod
+- 使用 `kubectl delete --wait=false` 异步提交 `bench-volcano` 中 Volcano Job 和 Pod 的删除请求
+- 等待并确认上述命名空间资源全部归零
 - 删除测试创建的子 Queue、`benchmark-root` 和 PriorityClass
+- 对命名空间和集群级测试资源执行最终零残留断言
 - 保留 `TestInit` 原地更新后的 Volcano Scheduler ConfigMap
 - 将全部调度相关 Deployment 设置为 `1` 副本并等待 Ready
 
 #### `down-yunikorn`
 
-- 删除 `bench-yunikorn` 中的 Kubernetes Job 和 Pod
+- 使用 `kubectl delete --wait=false` 异步提交 `bench-yunikorn` 中 Kubernetes Job 和 Pod 的删除请求
+- 等待并确认上述命名空间资源全部归零
+- 对命名空间测试资源执行最终零残留断言
 - 保留 `TestInit` 原地更新后的 `yunikorn-configs`
 - 将全部调度相关 Deployment 设置为 `1` 副本并等待 Ready
 
