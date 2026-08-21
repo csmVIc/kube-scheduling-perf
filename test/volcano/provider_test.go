@@ -9,7 +9,10 @@ import (
 
 	"github.com/wzshiming/kube-scheduling-perf/test/utils"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/e2e-framework/klient/decoder"
+	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
+	"sigs.k8s.io/e2e-framework/klient/wait"
 )
 
 //go:embed init.yaml
@@ -164,6 +167,41 @@ func (p *VolcanoProvider) AddJobs(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (p *VolcanoProvider) WaitJobsCompleted(ctx context.Context) error {
+	expected := p.QueueSize*p.JobsSizePerQueue +
+		p.ImpactingQueuesSize*p.ImpactingJobsSizePerQueue +
+		p.CriticalQueuesSize*p.CriticalJobsSizePerQueue
+
+	namespacedResources, err := resources.New(utils.Resources.GetConfig())
+	if err != nil {
+		return err
+	}
+	namespacedResources.WithNamespace("bench-volcano")
+
+	return wait.For(func(ctx context.Context) (bool, error) {
+		jobs := &unstructured.UnstructuredList{}
+		jobs.SetAPIVersion("batch.volcano.sh/v1alpha1")
+		jobs.SetKind("JobList")
+		if err := namespacedResources.List(ctx, jobs); err != nil {
+			return false, err
+		}
+		if len(jobs.Items) != expected {
+			return false, nil
+		}
+
+		for i := range jobs.Items {
+			phase, found, err := unstructured.NestedString(jobs.Items[i].Object, "status", "state", "phase")
+			if err != nil {
+				return false, err
+			}
+			if !found || phase != "Completed" {
+				return false, nil
+			}
+		}
+		return true, nil
+	}, wait.WithInterval(time.Second), wait.WithTimeout(time.Hour))
 }
 
 func (p *VolcanoProvider) addSingleJobs(ctx context.Context, podSize int, queueIndex int, priority string, duration string) error {

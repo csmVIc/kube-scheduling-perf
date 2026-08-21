@@ -2,8 +2,6 @@ package volcano_test
 
 import (
 	"testing"
-
-	"github.com/wzshiming/kube-scheduling-perf/test/utils"
 )
 
 func TestInit(t *testing.T) {
@@ -19,7 +17,7 @@ func TestBatchJob(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = utils.WaitDeployment(t.Context(), utils.Resources, "bench-volcano")
+	err = provider.WaitJobsCompleted(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
